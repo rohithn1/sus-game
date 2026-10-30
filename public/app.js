@@ -29,6 +29,7 @@
   let gamesList = [];
   let checklistOpen = LS.get('sus:clOpen') !== false;
   let shownMeetingId = null;
+  let shownMeetingVideo;
   let meetingHidden = false;
   let overlayBusy = false;
   let revealTimer = null;
@@ -119,10 +120,23 @@
   }
   socket.on('disconnect', () => { if (currentCode) toast('Reconnecting…', 1500); });
 
+  // Chat history is kept on the phone: the full list arrives once, then only small add/update packets.
+  let msgs = [], msgEpoch = null, msgCode = null;
   socket.on('state', (v) => {
     if (v.code !== currentCode) return;
+    if (v.messages) { msgs = v.messages.slice(); msgEpoch = v.msgEpoch; msgCode = v.code; }
+    else if (msgCode !== v.code || msgEpoch !== v.msgEpoch) socket.emit('resync');
     const prev = view; view = v;
     render(prev);
+  });
+  socket.on('msgs', (d) => {
+    if (d.code !== currentCode || !view) return;
+    if (d.epoch !== msgEpoch || msgCode !== d.code) { socket.emit('resync'); return; }
+    const have = new Map(msgs.map((m, i) => [m.id, i]));
+    for (const m of d.add) if (!have.has(m.id)) { have.set(m.id, msgs.length); msgs.push(m); }
+    for (const m of d.upd) { const i = have.get(m.id); if (i != null) msgs[i] = m; }
+    if (msgs.length > 300) msgs.splice(0, msgs.length - 300);
+    renderMessages(view);
   });
   socket.on('games', renderGames);
   // A player submitted a task photo: every host gets pinged, wherever they are in the app.
@@ -130,7 +144,10 @@
     if (!host) return;
     chime();
     try { navigator.vibrate && navigator.vibrate([200, 100, 200]); } catch {}
-    toast(`📸 @hosts — ${t.name} in ${t.code} wants approval: "${t.taskText}". Tap to open.`, 8000, () => {
+    const text = t.kind === 'kill'
+      ? `🔪 @hosts — kill to approve in ${t.code}: ${t.name} says they got ${t.victimName}. Tap to open.`
+      : `📸 @hosts — ${t.name} in ${t.code} wants approval: "${t.taskText}". Tap to open.`;
+    toast(text, 8000, () => {
       if (currentCode !== t.code) openHostGame(t.code); else setTab('chat');
     });
   });
@@ -178,7 +195,7 @@
     const box = $('hh-games'); box.innerHTML = '';
     if (!list.length) box.appendChild(el('p', 'hint', 'No games yet. Tap "+ New lobby" to get a code and QR.'));
     for (const g of list) {
-      const b = el('button', 'inbox-row' + (g.pending ? ' has-pending' : ''));
+      const b = el('button', 'inbox-row' + (g.pending || g.pendingKills ? ' has-pending' : ''));
       const top = el('div', 'inbox-top');
       top.appendChild(el('span', 'gcode', g.code));
       top.appendChild(el('span', 'pill' + pillCls(g.status), STATUS_TEXT[g.status]));
@@ -187,6 +204,7 @@
       b.appendChild(top);
       const bottom = el('div', 'inbox-bottom');
       bottom.appendChild(el('span', 'inbox-last grow', g.last || 'No messages yet'));
+      if (g.pendingKills) bottom.appendChild(el('span', 'pending-badge kill', `🔪 ${g.pendingKills} kill${g.pendingKills > 1 ? 's' : ''}`));
       if (g.pending) bottom.appendChild(el('span', 'pending-badge', `📸 ${g.pending} to approve`));
       b.appendChild(bottom);
       b.onclick = () => openHostGame(g.code);
@@ -196,7 +214,7 @@
   // On a game screen, the back arrow shows how many photos are waiting in the hosts' other games.
   function updateBackBadge() {
     const back = $('g-back');
-    const n = host ? gamesList.filter((g) => g.code !== currentCode).reduce((a, g) => a + g.pending, 0) : 0;
+    const n = host ? gamesList.filter((g) => g.code !== currentCode).reduce((a, g) => a + g.pending + (g.pendingKills || 0), 0) : 0;
     back.innerHTML = '←' + (n ? `<span class="back-badge">${n}</span>` : '');
   }
   function openHostGame(code) {
@@ -267,7 +285,7 @@
       return {
         cls: 'imposter', big: 'IMPOSTER',
         sub: (me.partners.length ? `Your fellow imposter: ${me.partners.join(', ')}. ` : '') +
-          'Kill crewmates without getting caught: tap ＋ → Post a kill video right after each kill. Your tasks are fake — pretend to do them.',
+          'Kill crewmates without getting caught: tap ＋ → Post a kill video (at least 5 seconds) right after each kill. A host approves it, then everyone is alerted. Your tasks are fake — pretend to do them.',
       };
     }
     return { cls: 'crew', big: 'CREWMATE', sub: `Finish your tasks and vote out the imposter${n > 1 ? 's' : ''}. There ${n > 1 ? 'are 2 imposters' : 'is 1 imposter'}.` };
@@ -313,6 +331,7 @@
     $('g-plus').classList.toggle('hidden', isHost || !inPlay);
 
     renderChecklist(v);
+    renderKillQueue(v);
     reviewToasts(prev, v);
     renderPlayers(v);
     if (isHost) renderControl(v);
@@ -356,7 +375,9 @@
     if (m.type === 'system') return el('div', 'msg system', m.text);
     if (m.type === 'kill') {
       const d = el('div', 'msg kill');
+      d.appendChild(el('div', 'who imp-who', '🔪 Imposters'));
       d.appendChild(el('div', 'kill-title', m.text));
+      if (!m.video) { d.appendChild(el('div', 'video-wait', '🎬 Video is processing…')); return d; }
       const vid = document.createElement('video');
       vid.src = m.video; vid.controls = true; vid.playsInline = true; vid.preload = 'metadata'; vid.setAttribute('playsinline', '');
       d.appendChild(vid);
@@ -378,10 +399,12 @@
     head.appendChild(el('span', 'tag-hosts', '@hosts'));
     d.appendChild(head);
     d.appendChild(el('div', 'task-text', m.taskText));
-    const img = document.createElement('img');
-    img.className = 'task-photo'; img.src = m.photo; img.alt = 'Task photo'; img.loading = 'lazy';
-    img.onclick = () => { $('ph-img').src = m.photo; $('ov-photo').classList.remove('hidden'); };
-    d.appendChild(img);
+    if (v.isHost || mine) {
+      const img = document.createElement('img');
+      img.className = 'task-photo'; img.src = m.photo; img.alt = 'Task photo'; img.loading = 'lazy';
+      img.onclick = () => { $('ph-img').src = m.photo; $('ov-photo').classList.remove('hidden'); };
+      d.appendChild(img);
+    }
     const txt = m.status === 'pending' ? '⏳ Waiting for a host'
       : m.status === 'approved' ? `✅ Approved by ${m.reviewer || 'a host'}`
       : `❌ Not accepted by ${m.reviewer || 'a host'} — try again`;
@@ -402,18 +425,19 @@
     }
     return d;
   }
-  const sigOf = (m, v) => (m.type === 'task' ? m.status + (canReview(v) ? ':r' : '') : '');
+  const sigOf = (m, v) => (m.type === 'task' ? m.status + (canReview(v) ? ':r' : '') : m.type === 'kill' ? (m.video ? 'v' : 'p') : '');
   function renderMessages(v) {
     const box = $('g-messages');
-    const key = v.code + ':' + v.round;
-    const overlap = v.messages.some((m) => rendered.has(m.id));
+    const list = msgCode === v.code ? msgs : [];
+    const key = v.code + ':' + msgEpoch;
+    const overlap = list.some((m) => rendered.has(m.id));
     if (key !== renderedKey || (rendered.size && !overlap)) {
       box.innerHTML = ''; rendered.clear(); renderedKey = key;
     }
     const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 140;
     let added = false;
     const live = new Set();
-    for (const m of v.messages) {
+    for (const m of list) {
       live.add(m.id);
       const sig = sigOf(m, v);
       const r = rendered.get(m.id);
@@ -456,8 +480,56 @@
   }
   $('cl-head').onclick = () => { checklistOpen = !checklistOpen; LS.set('sus:clOpen', checklistOpen); if (view) renderChecklist(view); };
 
+  // Hosts: kill videos waiting for approval, pinned above the chat. Nobody else ever sees these.
+  const killCards = new Map(); // kill id -> { node, sig }
+  function renderKillQueue(v) {
+    const box = $('g-killq');
+    const list = (v.isHost && v.pendingKills) || [];
+    box.classList.toggle('hidden', !list.length);
+    const ids = new Set(list.map((k) => k.id));
+    for (const [kid, c] of killCards) if (!ids.has(kid)) { c.node.remove(); killCards.delete(kid); }
+    for (const k of list) {
+      const sig = k.status + ':' + (k.video || '') + ':' + v.status;
+      const have = killCards.get(k.id);
+      if (have && have.sig === sig) continue;
+      const card = el('div', 'kill-card');
+      card.appendChild(el('div', 'kill-card-head', `🔪 Kill to approve · ${k.killerName} (imposter) says they got ${k.victimName}`));
+      if (!k.video) card.appendChild(el('div', 'video-wait', '🎬 Video is processing…'));
+      else {
+        const vid = document.createElement('video');
+        vid.src = k.video; vid.controls = true; vid.muted = true; vid.loop = true; vid.autoplay = true; vid.playsInline = true; vid.setAttribute('playsinline', '');
+        card.appendChild(vid);
+      }
+      if (k.seconds) card.appendChild(el('div', 'hint', `${k.seconds.toFixed(1)} seconds`));
+      const row = el('div', 'task-actions');
+      const yes = el('button', 'btn danger', v.status === 'meeting' ? 'Approve after the vote' : '✓ Approve kill');
+      const no = el('button', 'btn ghost', '✕ Reject');
+      yes.disabled = !k.video || v.status !== 'playing';
+      yes.onclick = async () => {
+        if (!confirm(`Approve? ${k.victimName} dies, the video posts to everyone, and a vote starts.`)) return;
+        yes.disabled = no.disabled = true;
+        const r = await call('host:reviewKill', { code: v.code, killId: k.id, approve: true });
+        if (!r.ok) { toast(r.error); yes.disabled = no.disabled = false; }
+      };
+      no.onclick = async () => {
+        if (!confirm(`Reject this kill video? ${k.killerName} can record a new one.`)) return;
+        const r = await call('host:reviewKill', { code: v.code, killId: k.id, approve: false });
+        if (!r.ok) toast(r.error);
+      };
+      row.appendChild(yes); row.appendChild(no);
+      card.appendChild(row);
+      if (have) have.node.replaceWith(card); else box.appendChild(card);
+      killCards.set(k.id, { node: card, sig });
+    }
+  }
+
   function reviewToasts(prev, v) {
     if (!prev || !prev.me || !v.me || prev.round !== v.round || prev.code !== v.code) return;
+    for (const k of v.me.myKills || []) {
+      const before = (prev.me.myKills || []).find((x) => x.id === k.id);
+      if (before && before.status !== k.status && k.status === 'rejected') toast(`❌ The hosts rejected your kill video of ${k.victimName}. Record a new one if you want.`, 5000);
+      if (before && before.status !== k.status && k.status === 'invalid') toast(`Your kill of ${k.victimName} couldn't be approved — they're already out.`, 5000);
+    }
     for (const t of v.me.tasks) {
       const before = prev.me.tasks.find((x) => x.id === t.id);
       if (!before) continue;
@@ -593,16 +665,22 @@
     if (!m) { ov.classList.add('hidden'); shownMeetingId = null; meetingHidden = false; $('mt-video').innerHTML = ''; return; }
     if (overlayBusy) return; // role reveal is on screen; show the meeting right after
     if (m.id !== shownMeetingId) {
-      shownMeetingId = m.id; meetingHidden = false;
-      const box = $('mt-video'); box.innerHTML = '';
-      const vid = document.createElement('video');
-      vid.src = m.video; vid.controls = true; vid.autoplay = true; vid.muted = true; vid.loop = true; vid.playsInline = true; vid.setAttribute('playsinline', '');
-      box.appendChild(vid);
+      shownMeetingId = m.id; meetingHidden = false; shownMeetingVideo = undefined;
       const seen = seenGet(v.code);
       if (seen.meeting !== m.id) {
         seenSet(v.code, { meeting: m.id });
         alarm();
         ov.classList.remove('flash'); void ov.offsetWidth; ov.classList.add('flash');
+      }
+    }
+    if (m.video !== shownMeetingVideo) {
+      shownMeetingVideo = m.video;
+      const box = $('mt-video'); box.innerHTML = '';
+      if (!m.video) box.appendChild(el('div', 'video-wait', '🎬 Kill video is processing…'));
+      else {
+        const vid = document.createElement('video');
+        vid.src = m.video; vid.controls = true; vid.autoplay = true; vid.muted = true; vid.loop = true; vid.playsInline = true; vid.setAttribute('playsinline', '');
+        box.appendChild(vid);
       }
     }
     ov.classList.toggle('hidden', meetingHidden);
@@ -709,11 +787,11 @@
   async function shrinkPhoto(file) {
     try {
       const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
-      const scale = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+      const scale = Math.min(1, 1280 / Math.max(bmp.width, bmp.height));
       const c = document.createElement('canvas');
       c.width = Math.round(bmp.width * scale); c.height = Math.round(bmp.height * scale);
       c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
-      const blob = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.82));
+      const blob = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.75));
       return blob || file;
     } catch { return file; }
   }
@@ -777,31 +855,78 @@
     killFile = f;
     const pv = $('kl-preview'); pv.src = URL.createObjectURL(f); pv.classList.remove('hidden'); pv.play().catch(() => {});
     const mb = (f.size / 1048576).toFixed(1);
-    $('kl-info').textContent = `${mb} MB`;
-    $('kl-send').classList.remove('hidden');
+    $('kl-info').textContent = 'Checking video length…';
+    $('kl-send').classList.add('hidden');
+    // Kill videos must be at least 5 seconds (and at most 15, to keep downloads small for everyone).
     pv.onloadedmetadata = () => {
       const d = pv.duration;
-      if (isFinite(d) && d > 9) {
-        $('kl-info').textContent = `That's ${Math.round(d)} seconds — keep it to about 5. Tap Record video to try again.`;
-        $('kl-send').classList.add('hidden'); killFile = null;
-      } else if (isFinite(d)) $('kl-info').textContent = `${d.toFixed(1)} s · ${mb} MB`;
+      if (isFinite(d) && d < 4.9) {
+        $('kl-info').textContent = `That's only ${d.toFixed(1)} seconds. Kill videos have to be at least 5 seconds — tap Record video to try again.`;
+        killFile = null;
+      } else if (isFinite(d) && d > 15) {
+        $('kl-info').textContent = `That's ${Math.round(d)} seconds — keep it between 5 and 15. Tap Record video to try again.`;
+        killFile = null;
+      } else {
+        $('kl-info').textContent = isFinite(d) ? `${d.toFixed(1)} s · ${mb} MB` : `${mb} MB`;
+        $('kl-send').classList.remove('hidden');
+      }
     };
+    pv.onerror = () => { $('kl-info').textContent = `${mb} MB`; $('kl-send').classList.remove('hidden'); };
   };
-  $('kl-send').onclick = () => {
+  // Re-record the clip at 360p on the phone (about 0.4 MB instead of ~10 MB) so 100 phones can download it.
+  function shrinkVideo(file, onProgress) {
+    const mime = window.MediaRecorder && HTMLCanvasElement.prototype.captureStream &&
+      ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp8', 'video/webm'].find((t) => MediaRecorder.isTypeSupported(t));
+    if (!mime) return Promise.resolve(file);
+    return new Promise((resolve) => {
+      const v = document.createElement('video');
+      v.muted = true; v.playsInline = true; v.setAttribute('playsinline', ''); v.src = URL.createObjectURL(file);
+      let done = false;
+      const finish = (blob) => { if (done) return; done = true; clearTimeout(timer); resolve(blob && blob.size > 20000 && blob.size < file.size ? blob : file); };
+      const timer = setTimeout(() => finish(null), 25000);
+      v.onerror = () => finish(null);
+      v.onloadedmetadata = async () => {
+        const scale = Math.min(1, 360 / Math.min(v.videoWidth || 360, v.videoHeight || 360));
+        const c = document.createElement('canvas');
+        c.width = Math.round(((v.videoWidth || 640) * scale) / 2) * 2; c.height = Math.round(((v.videoHeight || 480) * scale) / 2) * 2;
+        const ctx = c.getContext('2d');
+        let rec;
+        try { rec = new MediaRecorder(c.captureStream(24), { mimeType: mime, videoBitsPerSecond: 500000 }); } catch { return finish(null); }
+        const chunks = [];
+        rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+        rec.onstop = () => finish(new Blob(chunks, { type: mime.split(';')[0] }));
+        v.onended = () => { try { rec.stop(); } catch { finish(null); } };
+        const draw = () => {
+          if (done || v.ended) return;
+          ctx.drawImage(v, 0, 0, c.width, c.height);
+          if (onProgress && v.duration) onProgress(v.currentTime / v.duration);
+          requestAnimationFrame(draw);
+        };
+        rec.start(250);
+        try { await v.play(); } catch { try { rec.stop(); } catch {} return finish(null); }
+        draw();
+      };
+    });
+  }
+
+  $('kl-send').onclick = async () => {
     if (!killFile || !killVictim) return;
     $('kl-send').disabled = true; $('kl-bar').classList.remove('hidden'); $('kl-bar-fill').style.width = '0%';
+    $('kl-info').textContent = 'Shrinking video…';
+    const upload = await shrinkVideo(killFile, (f) => { $('kl-bar-fill').style.width = Math.round(f * 50) + '%'; });
+    $('kl-info').textContent = `Uploading ${(upload.size / 1048576).toFixed(1)} MB…`;
     const xhr = new XMLHttpRequest();
     xhr.open('POST', `/api/kill?code=${encodeURIComponent(currentCode)}&victim=${encodeURIComponent(killVictim.id)}`);
     xhr.setRequestHeader('x-player-token', player.token);
-    xhr.setRequestHeader('Content-Type', killFile.type || 'video/mp4');
-    xhr.upload.onprogress = (e) => { if (e.lengthComputable) $('kl-bar-fill').style.width = Math.round((e.loaded / e.total) * 100) + '%'; };
+    xhr.setRequestHeader('Content-Type', upload.type || 'video/mp4');
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable) $('kl-bar-fill').style.width = (50 + Math.round((e.loaded / e.total) * 50)) + '%'; };
     xhr.onload = () => {
       let r = {}; try { r = JSON.parse(xhr.responseText); } catch {}
-      if (xhr.status === 200) { $('ov-kill').classList.add('hidden'); resetKillStep2(); toast('Kill posted. Act natural. 🤫'); }
+      if (xhr.status === 200) { $('ov-kill').classList.add('hidden'); resetKillStep2(); toast('Sent to the hosts. Once a host approves it, everyone gets the alert. Act natural. 🤫', 4500); }
       else { toast(r.error || 'Upload failed.'); $('kl-send').disabled = false; }
     };
     xhr.onerror = () => { toast('Upload failed — check the Wi-Fi.'); $('kl-send').disabled = false; };
-    xhr.send(killFile);
+    xhr.send(upload);
   };
 
   // ---------- keep the screen awake during a game (needs https, e.g. the hosted version) ----------

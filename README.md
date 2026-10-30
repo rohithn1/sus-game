@@ -52,12 +52,15 @@ Edit `tasks.txt` on GitHub (open it, click the ✏️ pencil, put one task per l
 
 ## Rules the app enforces
 - 5 or fewer players get 1 imposter. 6 or more get 2, and imposters see who their partner is.
-- Imposters tap 📹, pick a victim, and record a ~5 second video. Everyone's phone then alarms with an **Emergency Meeting** that shows the video. Every player has the 📹 button, so having it gives nobody away.
+- **Kills:** the imposter taps ＋ → **Post a kill video**, picks the victim, and records a video of **at least 5 seconds** (shorter ones are refused). The phone shrinks it, then it goes **only to the hosts**. When a host taps **Approve kill**, the victim is out, the video posts in the chat from **🔪 Imposters**, and every phone alarms with an **Emergency Meeting**. If a host rejects it, nothing happens and the imposter can record again. Every player has the ＋ button, so having it gives nobody away.
 - Everyone still in the game votes, imposters included. Votes are final, the most votes is booted, and a tie boots nobody. The app announces whether the booted player was an imposter.
 - Killed and voted-off players can read the chat but can't talk or vote.
-- The crew wins when every imposter is out or all crew tasks are done. Imposters' tasks are fake and don't count. Imposters win once they equal or outnumber the crew.
 - Players can **hold "my role"** in the top bar to check their role again.
-- On the hosted version, phones keep their screen on during a game so the alarm isn't missed. Volume up, and on iPhone turn the silent switch off.
+
+## Big games (e.g. 100 people)
+- Lobbies hold up to 150 players. The free plan includes **5 GB of data per month**, and a 100-person, few-hour game should use roughly 1–2 GB, mostly kill videos. Add a card in Render so an overage is billed at $0.15/GB instead of suspending the app.
+- Task photos only go to hosts, which saves a lot of data. Expect many approvals at that size, so give the host link to a few trusted helpers.
+- Don't push changes during the event: every deploy restarts the server and wipes games in progress.
 
 ## Running it on your laptop instead (optional)
 Install Node.js from https://nodejs.org, then double-click `start.command` (Mac) or `start.bat` (Windows). The window prints the QR and your host link. Everyone has to be on the same Wi-Fi, and guest networks often block this.

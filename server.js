@@ -5,6 +5,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const QRCode = require('qrcode');
+const compression = require('compression');
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
@@ -76,7 +77,7 @@ function save() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     fs.writeFile(STATE_FILE, JSON.stringify(state), () => {});
-  }, 400);
+  }, 1500);
 }
 
 // ---------- helpers ----------
@@ -109,9 +110,18 @@ function lanAddress() {
 const BASE_URL = (process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || `http://${lanAddress()}:${PORT}`).replace(/\/$/, '');
 const HOST_URL = `${BASE_URL}/host/${HOST_KEY}`;
 
-function sysMsg(g, text, extra = {}) {
-  g.messages.push({ id: id(4), type: 'system', text, ts: now(), ...extra });
+// Chat goes out as small add/update packets instead of resending the whole history to every phone.
+const outbox = new Map(); // code -> { add: [], upd: [] }
+function box(g) { if (!outbox.has(g.code)) outbox.set(g.code, { add: [], upd: [] }); return outbox.get(g.code); }
+function pushMsg(g, m) {
+  g.messages.push(m);
   if (g.messages.length > 300) g.messages.splice(0, g.messages.length - 300);
+  box(g).add.push(m);
+}
+function updMsg(g, m) { if (g.messages.includes(m)) box(g).upd.push(m); }
+function resetMsgs(g) { g.messages = []; g.msgEpoch = (g.msgEpoch || 0) + 1; outbox.delete(g.code); }
+function sysMsg(g, text, extra = {}) {
+  pushMsg(g, { id: id(4), type: 'system', text, ts: now(), ...extra });
 }
 
 function crewProgress(g) {
@@ -137,6 +147,7 @@ function checkWin(g) {
   if (!winner) return false;
   g.status = 'ended';
   g.meeting = null;
+  g.pendingKills = [];
   g.winner = winner;
   g.winReason = reason;
   sysMsg(g, winner === 'crew' ? `🎉 CREW WINS — ${reason}` : `🔪 IMPOSTERS WIN — ${reason}`);
@@ -159,8 +170,8 @@ function startGame(g) {
     p.tasks = shuffle(pool).slice(0, per).map((text) => ({ id: id(3), text, done: false, pending: null }));
   }
   g.round = (g.round || 0) + 1;
-  g.messages = [];
-  g.meeting = null; g.lastResult = null; g.winner = null; g.winReason = '';
+  resetMsgs(g);
+  g.meeting = null; g.lastResult = null; g.winner = null; g.winReason = ''; g.pendingKills = [];
   g.status = 'reveal';
   g.revealStartedAt = now();
   sysMsg(g, `Game started with ${ps.length} players and ${nImp} imposter${nImp > 1 ? 's' : ''}. Split up and do your tasks! When you finish one, tap 📸 Submit on your checklist to send the hosts a photo.`);
@@ -209,7 +220,7 @@ function maybeAutoResolve(g) {
 }
 
 // ---------- views (each phone only gets what it may see) ----------
-function viewFor(g, who) {
+function viewFor(g, who, full) {
   const isHost = who.kind === 'host';
   const me = who.kind === 'player' ? g.players[who.playerId] : null;
   const ended = g.status === 'ended';
@@ -222,7 +233,7 @@ function viewFor(g, who) {
   }));
   const v = {
     code: g.code, status: g.status, round: g.round || 0, players,
-    messages: g.messages, progress: crewProgress(g),
+    msgEpoch: g.msgEpoch || 0, progress: crewProgress(g),
     settings: g.settings, winner: g.winner, winReason: g.winReason,
     lastResult: g.lastResult,
     joinUrl: `${BASE_URL}/?code=${g.code}`,
@@ -230,6 +241,7 @@ function viewFor(g, who) {
     revealAgoMs: g.status === 'reveal' ? now() - g.revealStartedAt : null,
     isHost,
   };
+  if (full) v.messages = g.messages;
   if (g.meeting) {
     const m = g.meeting;
     const voters = Object.values(g.players).filter(isAlive);
@@ -239,6 +251,8 @@ function viewFor(g, who) {
       myVote: me ? m.votes[me.id] || null : null,
     };
   }
+  const openKills = (g.pendingKills || []).filter((k) => k.status === 'processing' || k.status === 'pending');
+  if (isHost) v.pendingKills = openKills;
   if (me) {
     const partners = me.role === 'imposter'
       ? Object.values(g.players).filter((p) => p.role === 'imposter' && p.id !== me.id).map((p) => p.name)
@@ -247,6 +261,9 @@ function viewFor(g, who) {
       id: me.id, name: me.name, role: g.status === 'lobby' ? null : me.role, partners,
       tasks: me.tasks || [], alive: isAlive(me), dead: !!me.dead, ejected: !!me.ejected,
     };
+    if (me.role === 'imposter') {
+      v.me.myKills = (g.pendingKills || []).filter((k) => k.killerId === me.id).map((k) => ({ id: k.id, status: k.status, victimName: k.victimName }));
+    }
   }
   return v;
 }
@@ -255,6 +272,7 @@ function preview(m) {
   if (!m) return '';
   if (m.type === 'chat') return `${m.name}: ${m.text}`;
   if (m.type === 'task') return `📸 ${m.name} submitted a task`;
+  if (m.type === 'kill') return `🔪 Imposters: ${m.text}`;
   return m.text || '';
 }
 // The hosts' inbox: every game, most recent activity first, with how many task photos are waiting.
@@ -265,6 +283,7 @@ function gamesSummary() {
       return {
         code: g.code, status: g.status, players: Object.keys(g.players).length, createdAt: g.createdAt,
         pending: g.messages.filter((m) => m.type === 'task' && m.status === 'pending').length,
+        pendingKills: (g.pendingKills || []).filter((k) => k.status === 'processing' || k.status === 'pending').length,
         last: preview(last), lastTs: last ? last.ts : g.createdAt,
       };
     })
@@ -274,15 +293,18 @@ function gamesSummary() {
 // ---------- server ----------
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { maxHttpBufferSize: 1e6 });
+// Compress websocket traffic: game state is repetitive JSON and shrinks a lot.
+const io = new Server(server, { maxHttpBufferSize: 1e6, perMessageDeflate: { threshold: 1024, zlibDeflateOptions: { level: 1, memLevel: 7 } } });
 
+app.use(compression());
 app.use(express.static(path.join(ROOT, 'public')));
 // Secret host link: opens the normal page, which logs this phone in as a host.
 app.get('/host/:key', (req, res) => {
   if (!isHostKey(req.params.key)) return res.redirect('/');
   res.set('Cache-Control', 'no-store').sendFile(path.join(ROOT, 'public', 'index.html'));
 });
-app.use('/uploads', express.static(UPLOAD_DIR));
+// Upload names are unique, so phones can cache photos and videos forever instead of re-downloading them.
+app.use('/uploads', express.static(UPLOAD_DIR, { immutable: true, maxAge: '7d' }));
 
 app.get('/qr.svg', async (req, res) => {
   const code = clean(req.query.code, 8).toUpperCase();
@@ -297,17 +319,27 @@ const HAS_FFMPEG = spawnSync('ffmpeg', ['-version']).status === 0;
 function transcode(input, output) {
   return new Promise((resolve) => {
     // Small cloud servers are slow, so keep it quick: 480p, ultrafast, give up after 20s and use the original.
-    const p = spawn('ffmpeg', ['-y', '-i', input, '-t', '7', '-vf', 'scale=-2:min(480\\,ih)',
+    const p = spawn('ffmpeg', ['-y', '-i', input, '-t', '15', '-vf', 'scale=-2:min(360\\,ih)',
       '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28', '-pix_fmt', 'yuv420p',
       '-c:a', 'aac', '-b:a', '96k', '-movflags', '+faststart', output], { stdio: 'ignore' });
-    const t = setTimeout(() => { p.kill('SIGKILL'); resolve(false); }, 20000);
+    const t = setTimeout(() => { p.kill('SIGKILL'); resolve(false); }, 120000);
     p.on('close', (code) => { clearTimeout(t); resolve(code === 0); });
     p.on('error', () => { clearTimeout(t); resolve(false); });
   });
 }
 
-// Kill: imposter uploads a ~5 second video of the victim.
-app.post('/api/kill', express.raw({ type: () => true, limit: '100mb' }), async (req, res) => {
+const HAS_FFPROBE = spawnSync('ffprobe', ['-version']).status === 0;
+function videoSeconds(file) {
+  if (!HAS_FFPROBE) return null;
+  const r = spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', file], { encoding: 'utf8', timeout: 10000 });
+  const d = parseFloat(r.stdout);
+  return Number.isFinite(d) ? d : null; // webm recorded on a phone often has no duration; the host checks it then
+}
+const MIN_KILL_SECONDS = 5;
+
+// Kill: an imposter uploads a 5+ second video of the victim. It goes to the hosts first;
+// only after a host approves does the victim die, the video post in the chat, and the meeting start.
+app.post('/api/kill', express.raw({ type: () => true, limit: '60mb' }), async (req, res) => {
   try {
     const code = clean(req.query.code, 8).toUpperCase();
     const g = state.games[code];
@@ -320,6 +352,10 @@ app.post('/api/kill', express.raw({ type: () => true, limit: '100mb' }), async (
     if (!isAlive(killer)) return res.status(400).json({ error: "You're out of the game." });
     if (!victim || !isAlive(victim) || victim.role === 'imposter') return res.status(400).json({ error: 'Pick a crewmate who is still alive.' });
     if (!req.body || !req.body.length) return res.status(400).json({ error: 'No video received.' });
+    g.pendingKills = g.pendingKills || [];
+    if (g.pendingKills.some((k) => k.killerId === killer.id && (k.status === 'processing' || k.status === 'pending'))) {
+      return res.status(400).json({ error: 'Your last kill is still waiting for a host to approve it.' });
+    }
 
     const type = String(req.get('content-type') || '');
     // iPhone .mov files are H.264 in a QuickTime box; labelling them .mp4 lets Android play them too.
@@ -327,26 +363,33 @@ app.post('/api/kill', express.raw({ type: () => true, limit: '100mb' }), async (
     const base = `${code}-${now()}-${id(3)}`;
     const raw = path.join(UPLOAD_DIR, `${base}.${ext}`);
     fs.writeFileSync(raw, req.body);
+    const size = req.body.length;
+    const secs = videoSeconds(raw);
+    // the phone re-records clips in real time, which can shave a few tenths off
+    if (secs !== null && secs < MIN_KILL_SECONDS - 0.5) {
+      fs.unlink(raw, () => {});
+      return res.status(400).json({ error: `The video has to be at least ${MIN_KILL_SECONDS} seconds long. Record a longer one.` });
+    }
+
+    const kill = {
+      id: id(4), killerId: killer.id, killerName: killer.name, victimId: victim.id, victimName: victim.name,
+      video: null, seconds: secs, status: 'processing', ts: now(),
+    };
+    g.pendingKills.push(kill);
+    if (g.pendingKills.length > 30) g.pendingKills.splice(0, g.pendingKills.length - 30);
+    io.to('hosts').emit('host:tag', { kind: 'kill', code, name: killer.name, victimName: victim.name });
+    broadcast(g, 'hosts'); save();
+    res.json({ ok: true });
+
+    // Phones already shrink videos to small mp4s; only convert big or webm files (webm doesn't play on iPhones).
     let file = `${base}.${ext}`;
-    if (HAS_FFMPEG) {
+    if (HAS_FFMPEG && (ext === 'webm' || size > 3e6)) {
       const out = path.join(UPLOAD_DIR, `${base}-web.mp4`);
       if (await transcode(raw, out)) file = `${base}-web.mp4`;
     }
-
-    // re-check after the upload finished
-    if (g.status !== 'playing' || !isAlive(victim) || !isAlive(killer)) {
-      return res.status(409).json({ error: 'The game changed while uploading. Try again.' });
-    }
-    victim.dead = true;
-    const video = `/uploads/${file}`;
-    g.messages.push({ id: id(4), type: 'kill', video, victimId: victim.id, text: `💀 ${victim.name} was killed!`, ts: now() });
-    if (!checkWin(g)) {
-      g.status = 'meeting';
-      g.meeting = { id: id(4), victimId: victim.id, killerId: killer.id, video, votes: {}, startedAt: now() };
-      sysMsg(g, '🚨 EMERGENCY MEETING — everyone still alive must vote someone off.');
-    }
-    broadcast(g); save();
-    res.json({ ok: true });
+    kill.video = `/uploads/${file}`;
+    if (kill.status === 'processing') kill.status = 'pending';
+    broadcast(g, 'hosts'); save();
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Upload failed.' });
@@ -374,8 +417,7 @@ app.post('/api/task-photo', express.raw({ type: () => true, limit: '20mb' }), (r
     fs.writeFileSync(path.join(UPLOAD_DIR, file), req.body);
     const msg = { id: id(4), type: 'task', from: p.id, name: p.name, taskId: t.id, taskText: t.text, photo: `/uploads/${file}`, status: 'pending', ts: now() };
     t.pending = msg.id;
-    g.messages.push(msg);
-    if (g.messages.length > 300) g.messages.splice(0, g.messages.length - 300);
+    pushMsg(g, msg);
     io.to('hosts').emit('host:tag', { code, msgId: msg.id, name: p.name, taskText: t.text });
     broadcast(g); save();
     res.json({ ok: true });
@@ -395,14 +437,43 @@ function whoOf(socket) {
   if (socket.data.playerId) return { kind: 'player', playerId: socket.data.playerId };
   return { kind: 'none' };
 }
-function broadcast(g) {
-  for (const s of socketsIn('game:' + g.code)) {
-    const who = whoOf(s);
-    if (who.kind === 'player' && !g.players[who.playerId]) continue;
-    s.emit('state', viewFor(g, who));
+// Changes are batched (~60ms) so a burst of votes or messages becomes one update per phone.
+// 'all'   = game state changed: every phone gets fresh state (plus any new chat)
+// 'hosts' = only host screens need refreshing (someone's connection dropped/returned)
+// 'msgs'  = only new/changed chat messages: one small packet to the room, no state resend
+const pendingFlush = new Map(); // code -> Set of levels
+const sentEpoch = new Map();    // code -> msgEpoch every phone has
+function broadcast(g, level = 'all') {
+  let set = pendingFlush.get(g.code);
+  if (!set) { set = new Set(); pendingFlush.set(g.code, set); setTimeout(() => flush(g.code), 60); }
+  set.add(level);
+}
+function flush(code) {
+  const levels = pendingFlush.get(code) || new Set();
+  pendingFlush.delete(code);
+  const g = state.games[code];
+  if (!g) return;
+  const room = 'game:' + code;
+  const epoch = g.msgEpoch || 0;
+  const full = sentEpoch.get(code) !== epoch; // chat history was reset: everyone gets the full chat once
+  const toAll = levels.has('all') || full;
+  if (toAll || levels.has('hosts')) {
+    for (const s of socketsIn(room)) {
+      const who = whoOf(s);
+      if (!toAll && who.kind !== 'host') continue;
+      if (who.kind === 'player' && !g.players[who.playerId]) continue;
+      s.emit('state', viewFor(g, who, full));
+    }
+  }
+  if (toAll) sentEpoch.set(code, epoch);
+  const b = outbox.get(code);
+  if (b && (b.add.length || b.upd.length)) {
+    if (!full) io.to(room).emit('msgs', { code, epoch, add: b.add, upd: b.upd });
+    outbox.delete(code);
   }
   io.to('hosts').emit('games', gamesSummary());
 }
+function sendFull(socket, g) { socket.emit('state', viewFor(g, whoOf(socket), true)); }
 
 function requireHost(socket) {
   if (!socket.data.isHost) throw new Error('Host login required.');
@@ -428,7 +499,7 @@ function on(socket, event, fn) {
 function setConnected(socket, val) {
   const g = socket.data.code && state.games[socket.data.code];
   const p = g && g.players[socket.data.playerId];
-  if (p) { p.connected = val; broadcast(g); }
+  if (p) { p.connected = val; broadcast(g, 'hosts'); }
 }
 
 io.on('connection', (socket) => {
@@ -450,7 +521,8 @@ io.on('connection', (socket) => {
     socket.data.code = g.code; socket.data.playerId = p.id;
     socket.join('game:' + g.code);
     p.connected = true;
-    broadcast(g);
+    sendFull(socket, g);
+    broadcast(g, 'hosts');
     return { playerId: p.id };
   });
 
@@ -460,12 +532,13 @@ io.on('connection', (socket) => {
     if (!name) throw new Error('Enter your name.');
     if (g.status !== 'lobby') throw new Error('That game already started. Wait for the next round.');
     if (Object.values(g.players).some((p) => p.name.toLowerCase() === name.toLowerCase())) throw new Error('Someone already has that name.');
-    if (Object.keys(g.players).length >= 30) throw new Error('Lobby is full.');
+    if (Object.keys(g.players).length >= 150) throw new Error('Lobby is full.');
     const p = { id: id(5), token: id(16), name, joinedAt: now(), role: null, tasks: [], dead: false, ejected: false, connected: true };
     g.players[p.id] = p;
     socket.data.code = g.code; socket.data.playerId = p.id;
     socket.join('game:' + g.code);
     sysMsg(g, `${name} joined.`);
+    sendFull(socket, g);
     broadcast(g); save();
     return { token: p.token, playerId: p.id, code: g.code };
   });
@@ -489,16 +562,15 @@ io.on('connection', (socket) => {
     if (!text) return;
     const who = whoOf(socket);
     if (who.kind === 'host') {
-      g.messages.push({ id: id(4), type: 'chat', host: true, name: hostName(socket), text, ts: now() });
+      pushMsg(g, { id: id(4), type: 'chat', host: true, name: hostName(socket), text, ts: now() });
     } else if (who.kind === 'player' && socket.data.code === g.code) {
       const p = g.players[who.playerId];
       if (!p) throw new Error('Not in this game.');
       const inPlay = !['lobby', 'ended'].includes(g.status);
       if (inPlay && !isAlive(p)) throw new Error("You're out — you can read the chat but can't send messages.");
-      g.messages.push({ id: id(4), type: 'chat', from: p.id, name: p.name, text, ts: now() });
+      pushMsg(g, { id: id(4), type: 'chat', from: p.id, name: p.name, text, ts: now() });
     } else throw new Error('Not in this game.');
-    if (g.messages.length > 300) g.messages.splice(0, g.messages.length - 300);
-    broadcast(g); save();
+    broadcast(g, 'msgs'); save();
   });
 
   on(socket, 'vote', ({ targetId }) => {
@@ -534,7 +606,7 @@ io.on('connection', (socket) => {
     const g = gameOr(code);
     for (const room of socket.rooms) if (room.startsWith('game:')) socket.leave(room);
     socket.join('game:' + g.code);
-    socket.emit('state', viewFor(g, { kind: 'host' }));
+    socket.emit('state', viewFor(g, { kind: 'host' }, true));
   });
 
   on(socket, 'host:leaveView', () => {
@@ -559,7 +631,7 @@ io.on('connection', (socket) => {
     t.done = !t.done;
     if (t.pending) {
       const m = g.messages.find((x) => x.id === t.pending);
-      if (m && t.done) { m.status = 'approved'; m.reviewer = hostName(socket); }
+      if (m && t.done) { m.status = 'approved'; m.reviewer = hostName(socket); updMsg(g, m); }
       t.pending = null;
     }
     checkWin(g);
@@ -577,8 +649,39 @@ io.on('connection', (socket) => {
     const t = p && p.tasks.find((x) => x.id === m.taskId);
     m.status = approve ? 'approved' : 'rejected';
     m.reviewer = hostName(socket);
+    updMsg(g, m);
     if (t) { t.pending = null; if (approve) t.done = true; }
     if (approve) checkWin(g);
+    broadcast(g); save();
+  });
+
+  on(socket, 'host:reviewKill', ({ code, killId, approve }) => {
+    requireHost(socket);
+    const g = gameOr(code);
+    const k = (g.pendingKills || []).find((x) => x.id === killId);
+    if (!k || (k.status !== 'pending' && k.status !== 'processing')) throw new Error('That kill was already handled.');
+    if (!approve) {
+      k.status = 'rejected'; k.reviewer = hostName(socket);
+      broadcast(g); save();
+      return;
+    }
+    if (k.status === 'processing') throw new Error('The video is still processing. Try again in a moment.');
+    if (g.status === 'meeting') throw new Error('A vote is happening. Approve this after the vote ends.');
+    if (g.status !== 'playing') throw new Error('The game is not running.');
+    const killer = g.players[k.killerId], victim = g.players[k.victimId];
+    if (!killer || !isAlive(killer) || !victim || !isAlive(victim)) {
+      k.status = 'invalid';
+      broadcast(g); save();
+      throw new Error(`Can't approve: ${!killer || !isAlive(killer) ? k.killerName : k.victimName} is already out.`);
+    }
+    k.status = 'approved'; k.reviewer = hostName(socket);
+    victim.dead = true;
+    pushMsg(g, { id: id(4), type: 'kill', from: 'imposters', video: k.video, victimId: victim.id, text: `💀 ${victim.name} was killed!`, ts: now() });
+    if (!checkWin(g)) {
+      g.status = 'meeting';
+      g.meeting = { id: id(4), victimId: victim.id, killerId: killer.id, video: k.video, votes: {}, startedAt: now() };
+      sysMsg(g, '🚨 EMERGENCY MEETING — everyone still alive must vote someone off.');
+    }
     broadcast(g); save();
   });
 
@@ -594,7 +697,7 @@ io.on('connection', (socket) => {
     requireHost(socket);
     const g = gameOr(code);
     if (g.status === 'lobby') throw new Error('Game has not started.');
-    g.status = 'ended'; g.meeting = null; g.winner = null; g.winReason = 'The host ended the game.';
+    g.status = 'ended'; g.meeting = null; g.winner = null; g.winReason = 'The host ended the game.'; g.pendingKills = [];
     sysMsg(g, 'The host ended the game.');
     broadcast(g); save();
   });
@@ -602,9 +705,9 @@ io.on('connection', (socket) => {
   on(socket, 'host:toLobby', ({ code }) => {
     requireHost(socket);
     const g = gameOr(code);
-    g.status = 'lobby'; g.meeting = null; g.lastResult = null; g.winner = null; g.winReason = '';
+    g.status = 'lobby'; g.meeting = null; g.lastResult = null; g.winner = null; g.winReason = ''; g.pendingKills = [];
     for (const p of Object.values(g.players)) { p.role = null; p.tasks = []; p.dead = false; p.ejected = false; }
-    g.messages = [];
+    resetMsgs(g);
     sysMsg(g, 'Back in the lobby. New players can join now.');
     broadcast(g); save();
   });
@@ -651,6 +754,12 @@ io.on('connection', (socket) => {
   on(socket, 'host:logout', () => {
     socket.data.isHost = false;
     socket.leave('hosts');
+  });
+
+  // A phone that missed an update (or saw a history reset) asks for the full chat again.
+  on(socket, 'resync', () => {
+    const g = state.games[socket.data.code] || (socket.data.isHost && [...socket.rooms].find((r) => r.startsWith('game:')) && state.games[[...socket.rooms].find((r) => r.startsWith('game:')).slice(5)]);
+    if (g) sendFull(socket, g);
   });
 
   socket.on('disconnect', () => setConnected(socket, false));
