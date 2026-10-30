@@ -45,9 +45,15 @@
     <span class="pill host">HOST · <span id="hh-name"></span></span>
   </header>
   <div class="scroll pad stack">
-    <button class="btn primary big" id="hh-create">+ New game lobby</button>
-    <h3>Lobbies</h3>
-    <div id="hh-games" class="stack"></div>
+    <div class="inbox-head">
+      <h2>All games</h2>
+      <button class="btn primary small" id="hh-create">+ New lobby</button>
+    </div>
+    <p class="hint">You're watching every game. You'll get pinged when someone submits a task photo — tap a game to jump in.</p>
+    <div id="hh-games" class="inbox"></div>
+    <details class="settings">
+    <summary>Host settings</summary>
+    <div class="stack settings-body">
     <h3>Task list</h3>
     <p class="hint">One task per line. Each player gets a random handful when a game starts.</p>
     <textarea id="hh-tasks" rows="10"></textarea>
@@ -57,6 +63,8 @@
     <button class="btn" id="hh-copy-link">Copy host link</button>
     <div class="spacer"></div>
     <button class="link danger" id="hh-logout">Log out of host mode</button>
+    </div>
+    </details>
   </div>
 </section>
 
@@ -75,27 +83,25 @@
   </div>
   <nav class="tabs" id="g-tabs">
     <button data-tab="chat" class="active">Chat</button>
-    <button data-tab="tasks" id="tab-tasks-btn">Tasks</button>
     <button data-tab="players" id="tab-players-btn">Players</button>
     <button data-tab="control" id="tab-control-btn">Host</button>
   </nav>
 
   <div class="tabpane" id="pane-chat">
     <div class="banner hidden" id="g-banner"></div>
+    <div class="checklist hidden" id="g-checklist">
+      <button type="button" class="checklist-head" id="cl-head">
+        <span class="grow" id="cl-title">Your tasks</span><span class="cl-caret" id="cl-caret">▾</span>
+      </button>
+      <ul id="g-tasks" class="tasklist compact"></ul>
+    </div>
     <div class="messages" id="g-messages"></div>
     <form class="chatbar" id="chat-form">
-      <button type="button" class="icon-btn video" id="g-video" aria-label="Post video">📹</button>
+      <button type="button" class="icon-btn" id="g-plus" aria-label="Photo or video">＋</button>
       <input id="chat-input" maxlength="400" placeholder="Message" autocomplete="off">
       <button class="btn primary" type="submit">Send</button>
     </form>
     <div class="chat-locked hidden" id="chat-locked"></div>
-  </div>
-
-  <div class="tabpane hidden" id="pane-tasks">
-    <div class="scroll pad stack">
-      <p class="hint">Do each task in real life, take a photo, and show it to a host. They'll mark it done.</p>
-      <ul id="g-tasks" class="tasklist"></ul>
-    </div>
   </div>
 
   <div class="tabpane hidden" id="pane-players">
@@ -190,6 +196,39 @@
     </div>
   </div>
 </div>
+
+<div id="ov-actions" class="overlay sheet hidden">
+  <div class="sheet-inner stack">
+    <button class="btn big" id="act-task">📸 Submit a task photo</button>
+    <button class="btn big" id="act-kill">📹 Post a kill video</button>
+    <button class="link" id="act-cancel">Cancel</button>
+  </div>
+</div>
+
+<div id="ov-task" class="overlay sheet hidden">
+  <div class="sheet-inner">
+    <div class="sheet-head">
+      <h2>Submit a task</h2>
+      <button class="icon-btn" id="tk-close" aria-label="Close">✕</button>
+    </div>
+    <div id="tk-step1">
+      <p class="hint">Which task is this photo for?</p>
+      <div id="tk-list" class="stack"></div>
+    </div>
+    <div id="tk-step2" class="hidden stack">
+      <p>Photo for: <b id="tk-name"></b></p>
+      <label class="btn primary big file-btn">📸 Take photo
+        <input type="file" id="tk-file" accept="image/*" capture="environment">
+      </label>
+      <img id="tk-preview" class="photo-preview hidden" alt="">
+      <button class="btn primary big hidden" id="tk-send">Send to hosts for approval</button>
+      <div class="upload-bar hidden" id="tk-bar"><div id="tk-bar-fill"></div></div>
+      <button class="link" id="tk-backstep">← Pick a different task</button>
+    </div>
+  </div>
+</div>
+
+<div id="ov-photo" class="overlay photo-view hidden"><img id="ph-img" alt=""></div>
 
 <div id="toast" class="toast hidden"></div>
 

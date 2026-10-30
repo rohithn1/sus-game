@@ -156,14 +156,14 @@ function startGame(g) {
   for (const p of ps) {
     p.role = imps.has(p.id) ? 'imposter' : 'crew';
     p.dead = false; p.ejected = false;
-    p.tasks = shuffle(pool).slice(0, per).map((text) => ({ id: id(3), text, done: false }));
+    p.tasks = shuffle(pool).slice(0, per).map((text) => ({ id: id(3), text, done: false, pending: null }));
   }
   g.round = (g.round || 0) + 1;
   g.messages = [];
   g.meeting = null; g.lastResult = null; g.winner = null; g.winReason = '';
   g.status = 'reveal';
   g.revealStartedAt = now();
-  sysMsg(g, `Game started with ${ps.length} players and ${nImp} imposter${nImp > 1 ? 's' : ''}. Split up and do your tasks! Show a host your photo to get a task approved.`);
+  sysMsg(g, `Game started with ${ps.length} players and ${nImp} imposter${nImp > 1 ? 's' : ''}. Split up and do your tasks! When you finish one, tap 📸 Submit on your checklist to send the hosts a photo.`);
   const round = g.round;
   setTimeout(() => {
     if (g.status === 'reveal' && g.round === round) { g.status = 'playing'; broadcast(g); save(); }
@@ -251,10 +251,24 @@ function viewFor(g, who) {
   return v;
 }
 
+function preview(m) {
+  if (!m) return '';
+  if (m.type === 'chat') return `${m.name}: ${m.text}`;
+  if (m.type === 'task') return `📸 ${m.name} submitted a task`;
+  return m.text || '';
+}
+// The hosts' inbox: every game, most recent activity first, with how many task photos are waiting.
 function gamesSummary() {
   return Object.values(state.games)
-    .sort((a, b) => b.createdAt - a.createdAt)
-    .map((g) => ({ code: g.code, status: g.status, players: Object.keys(g.players).length, createdAt: g.createdAt }));
+    .map((g) => {
+      const last = g.messages[g.messages.length - 1];
+      return {
+        code: g.code, status: g.status, players: Object.keys(g.players).length, createdAt: g.createdAt,
+        pending: g.messages.filter((m) => m.type === 'task' && m.status === 'pending').length,
+        last: preview(last), lastTs: last ? last.ts : g.createdAt,
+      };
+    })
+    .sort((a, b) => b.lastTs - a.lastTs);
 }
 
 // ---------- server ----------
@@ -331,6 +345,38 @@ app.post('/api/kill', express.raw({ type: () => true, limit: '100mb' }), async (
       g.meeting = { id: id(4), victimId: victim.id, killerId: killer.id, video, votes: {}, startedAt: now() };
       sysMsg(g, '🚨 EMERGENCY MEETING — everyone still alive must vote someone off.');
     }
+    broadcast(g); save();
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Upload failed.' });
+  }
+});
+
+// Task photo: a player uploads a photo tagged with one of their tasks; every host gets pinged.
+app.post('/api/task-photo', express.raw({ type: () => true, limit: '20mb' }), (req, res) => {
+  try {
+    const code = clean(req.query.code, 8).toUpperCase();
+    const g = state.games[code];
+    const token = req.get('x-player-token');
+    const p = g && Object.values(g.players).find((x) => x.token === token);
+    if (!g || !p) return res.status(403).json({ error: 'Not in this game.' });
+    if (!['playing', 'meeting'].includes(g.status)) return res.status(400).json({ error: 'You can only submit tasks while the game is running.' });
+    const t = (p.tasks || []).find((x) => x.id === clean(req.query.task, 20));
+    if (!t) return res.status(400).json({ error: 'Pick one of your tasks.' });
+    if (t.done) return res.status(400).json({ error: 'That task is already done.' });
+    if (t.pending) return res.status(400).json({ error: 'That task is already waiting for a host.' });
+    const type = String(req.get('content-type') || '');
+    if (!type.startsWith('image/')) return res.status(400).json({ error: 'That file is not a photo.' });
+    if (!req.body || !req.body.length) return res.status(400).json({ error: 'No photo received.' });
+    const ext = type.includes('png') ? 'png' : type.includes('webp') ? 'webp' : 'jpg';
+    const file = `${code}-task-${now()}-${id(3)}.${ext}`;
+    fs.writeFileSync(path.join(UPLOAD_DIR, file), req.body);
+    const msg = { id: id(4), type: 'task', from: p.id, name: p.name, taskId: t.id, taskText: t.text, photo: `/uploads/${file}`, status: 'pending', ts: now() };
+    t.pending = msg.id;
+    g.messages.push(msg);
+    if (g.messages.length > 300) g.messages.splice(0, g.messages.length - 300);
+    io.to('hosts').emit('host:tag', { code, msgId: msg.id, name: p.name, taskText: t.text });
     broadcast(g); save();
     res.json({ ok: true });
   } catch (e) {
@@ -511,7 +557,28 @@ io.on('connection', (socket) => {
     const t = p && p.tasks.find((x) => x.id === taskId);
     if (!t) throw new Error('Task not found.');
     t.done = !t.done;
+    if (t.pending) {
+      const m = g.messages.find((x) => x.id === t.pending);
+      if (m && t.done) { m.status = 'approved'; m.reviewer = hostName(socket); }
+      t.pending = null;
+    }
     checkWin(g);
+    broadcast(g); save();
+  });
+
+  on(socket, 'host:review', ({ code, msgId, approve }) => {
+    requireHost(socket);
+    const g = gameOr(code);
+    if (!['playing', 'meeting', 'reveal'].includes(g.status)) throw new Error('The game is not running.');
+    const m = g.messages.find((x) => x.id === msgId && x.type === 'task');
+    if (!m) throw new Error('Submission not found.');
+    if (m.status !== 'pending') throw new Error(`Already ${m.status} by ${m.reviewer || 'a host'}.`);
+    const p = g.players[m.from];
+    const t = p && p.tasks.find((x) => x.id === m.taskId);
+    m.status = approve ? 'approved' : 'rejected';
+    m.reviewer = hostName(socket);
+    if (t) { t.pending = null; if (approve) t.done = true; }
+    if (approve) checkWin(g);
     broadcast(g); save();
   });
 

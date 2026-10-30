@@ -25,7 +25,9 @@
   let showRoles = false;
   let justOpened = false;
   let renderedKey = null;
-  const renderedMsgIds = new Set();
+  const rendered = new Map();            // message id -> { node, sig }
+  let gamesList = [];
+  let checklistOpen = LS.get('sus:clOpen') !== false;
   let shownMeetingId = null;
   let meetingHidden = false;
   let overlayBusy = false;
@@ -43,8 +45,10 @@
     if (name !== 'game') for (const o of ['ov-meeting', 'ov-result', 'ov-reveal', 'ov-kill', 'ov-peek']) $(o).classList.add('hidden');
   }
   let toastTimer;
-  function toast(msg, ms = 2800) {
+  function toast(msg, ms = 2800, onClick) {
     const t = $('toast'); t.textContent = msg; t.classList.remove('hidden');
+    t.classList.toggle('clickable', !!onClick);
+    t.onclick = () => { t.classList.add('hidden'); if (onClick) onClick(); };
     clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.add('hidden'), ms);
   }
   const call = (event, payload) => new Promise((res) => socket.emit(event, payload, (r) => res(r || { ok: false, error: 'No response' })));
@@ -121,6 +125,15 @@
     render(prev);
   });
   socket.on('games', renderGames);
+  // A player submitted a task photo: every host gets pinged, wherever they are in the app.
+  socket.on('host:tag', (t) => {
+    if (!host) return;
+    chime();
+    try { navigator.vibrate && navigator.vibrate([200, 100, 200]); } catch {}
+    toast(`📸 @hosts — ${t.name} in ${t.code} wants approval: "${t.taskText}". Tap to open.`, 8000, () => {
+      if (currentCode !== t.code) openHostGame(t.code); else setTab('chat');
+    });
+  });
   socket.on('taskPool', (tasks) => { if (document.activeElement !== $('hh-tasks')) $('hh-tasks').value = tasks.join('\n'); });
   socket.on('kicked', () => {
     if (host) { currentCode = null; view = null; $('hh-name').textContent = host.name; show('hosthome'); toast('That lobby was deleted.'); return; }
@@ -152,19 +165,39 @@
 
   // ---------- host home ----------
   const STATUS_TEXT = { lobby: 'Lobby', reveal: 'Starting', playing: 'Live', meeting: 'Voting', ended: 'Game over' };
+  const pillCls = (s) => (s === 'meeting' ? ' meeting' : s === 'playing' ? ' live' : '');
+  function timeAgo(ts) {
+    const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+    if (s < 45) return 'now';
+    if (s < 3600) return Math.round(s / 60) + 'm';
+    if (s < 86400) return Math.round(s / 3600) + 'h';
+    return Math.round(s / 86400) + 'd';
+  }
   function renderGames(list) {
+    gamesList = list; updateBackBadge();
     const box = $('hh-games'); box.innerHTML = '';
-    if (!list.length) box.appendChild(el('p', 'hint', 'No lobbies yet. Create one to get a code and QR.'));
+    if (!list.length) box.appendChild(el('p', 'hint', 'No games yet. Tap "+ New lobby" to get a code and QR.'));
     for (const g of list) {
-      const b = el('button', 'gcard');
-      b.appendChild(el('div', 'gcode', g.code));
-      const meta = el('div', 'grow');
-      meta.appendChild(el('div', 'gmeta', `${g.players} player${g.players === 1 ? '' : 's'}`));
-      b.appendChild(meta);
-      b.appendChild(el('span', 'pill' + (g.status === 'meeting' ? ' meeting' : g.status === 'playing' ? ' live' : ''), STATUS_TEXT[g.status]));
+      const b = el('button', 'inbox-row' + (g.pending ? ' has-pending' : ''));
+      const top = el('div', 'inbox-top');
+      top.appendChild(el('span', 'gcode', g.code));
+      top.appendChild(el('span', 'pill' + pillCls(g.status), STATUS_TEXT[g.status]));
+      top.appendChild(el('span', 'inbox-meta grow', `${g.players} player${g.players === 1 ? '' : 's'}`));
+      top.appendChild(el('span', 'inbox-time', timeAgo(g.lastTs)));
+      b.appendChild(top);
+      const bottom = el('div', 'inbox-bottom');
+      bottom.appendChild(el('span', 'inbox-last grow', g.last || 'No messages yet'));
+      if (g.pending) bottom.appendChild(el('span', 'pending-badge', `📸 ${g.pending} to approve`));
+      b.appendChild(bottom);
       b.onclick = () => openHostGame(g.code);
       box.appendChild(b);
     }
+  }
+  // On a game screen, the back arrow shows how many photos are waiting in the hosts' other games.
+  function updateBackBadge() {
+    const back = $('g-back');
+    const n = host ? gamesList.filter((g) => g.code !== currentCode).reduce((a, g) => a + g.pending, 0) : 0;
+    back.innerHTML = '←' + (n ? `<span class="back-badge">${n}</span>` : '');
   }
   function openHostGame(code) {
     currentCode = code; view = null; justOpened = true; tab = 'chat';
@@ -207,7 +240,7 @@
     tab = t;
     if (t === 'chat') unreadChat = false;
     document.querySelectorAll('#g-tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === t));
-    for (const p of ['chat', 'tasks', 'players', 'control']) $('pane-' + p).classList.toggle('hidden', p !== t);
+    for (const p of ['chat', 'players', 'control']) $('pane-' + p).classList.toggle('hidden', p !== t);
     if (t === 'chat') { const box = $('g-messages'); box.scrollTop = box.scrollHeight; }
     updateChatBadge();
   }
@@ -234,7 +267,7 @@
       return {
         cls: 'imposter', big: 'IMPOSTER',
         sub: (me.partners.length ? `Your fellow imposter: ${me.partners.join(', ')}. ` : '') +
-          'Kill crewmates without getting caught: post a ~5 second video of each kill with the 📹 button. Your tasks are fake — pretend to do them.',
+          'Kill crewmates without getting caught: tap ＋ → Post a kill video right after each kill. Your tasks are fake — pretend to do them.',
       };
     }
     return { cls: 'crew', big: 'CREWMATE', sub: `Finish your tasks and vote out the imposter${n > 1 ? 's' : ''}. There ${n > 1 ? 'are 2 imposters' : 'is 1 imposter'}.` };
@@ -263,9 +296,9 @@
     $('g-progress-label').textContent = `Tasks ${pct}%`;
 
     // tabs
-    $('tab-tasks-btn').classList.toggle('hidden', isHost);
     $('tab-control-btn').classList.toggle('hidden', !isHost);
-    if ((isHost && tab === 'tasks') || (!isHost && tab === 'control')) setTab('chat');
+    if (!isHost && tab === 'control') setTab('chat');
+    updateBackBadge();
 
     renderBanner(v);
     renderMessages(v);
@@ -277,9 +310,10 @@
     if (out) $('chat-locked').textContent = me.ejected
       ? "You were voted off. You can read the chat but can't send messages."
       : "You were killed. You can read the chat but can't send messages.";
-    $('g-video').classList.toggle('hidden', isHost || !inPlay);
+    $('g-plus').classList.toggle('hidden', isHost || !inPlay);
 
-    renderTasks(v);
+    renderChecklist(v);
+    reviewToasts(prev, v);
     renderPlayers(v);
     if (isHost) renderControl(v);
 
@@ -328,40 +362,107 @@
       d.appendChild(vid);
       return d;
     }
+    if (m.type === 'task') return taskEl(m, v);
     const mine = !v.isHost ? m.from === myId : (m.host && host && m.name === host.name);
     const d = el('div', 'msg' + (mine ? ' mine' : '') + (m.host ? ' host' : ''));
     d.appendChild(el('div', 'who', m.host ? `${m.name} · HOST` : m.name));
     d.appendChild(el('div', 'bubble', m.text));
     return d;
   }
+  const canReview = (v) => v.isHost && ['playing', 'meeting', 'reveal'].includes(v.status);
+  function taskEl(m, v) {
+    const mine = !v.isHost && v.me && m.from === v.me.id;
+    const d = el('div', 'msg task' + (mine ? ' mine' : ''));
+    const head = el('div', 'task-head');
+    head.appendChild(el('span', 'grow', `📸 ${mine ? 'You' : m.name} submitted a task`));
+    head.appendChild(el('span', 'tag-hosts', '@hosts'));
+    d.appendChild(head);
+    d.appendChild(el('div', 'task-text', m.taskText));
+    const img = document.createElement('img');
+    img.className = 'task-photo'; img.src = m.photo; img.alt = 'Task photo'; img.loading = 'lazy';
+    img.onclick = () => { $('ph-img').src = m.photo; $('ov-photo').classList.remove('hidden'); };
+    d.appendChild(img);
+    const txt = m.status === 'pending' ? '⏳ Waiting for a host'
+      : m.status === 'approved' ? `✅ Approved by ${m.reviewer || 'a host'}`
+      : `❌ Not accepted by ${m.reviewer || 'a host'} — try again`;
+    d.appendChild(el('div', 'task-status ' + m.status, txt));
+    if (m.status === 'pending' && canReview(v)) {
+      const row = el('div', 'task-actions');
+      const yes = el('button', 'btn primary', '✓ Approve');
+      const no = el('button', 'btn ghost', '✕ Reject');
+      const review = async (approve, btn) => {
+        yes.disabled = no.disabled = true;
+        const r = await call('host:review', { code: v.code, msgId: m.id, approve });
+        if (!r.ok) { toast(r.error); yes.disabled = no.disabled = false; }
+      };
+      yes.onclick = () => review(true);
+      no.onclick = () => { if (confirm(`Reject ${m.name}'s photo? They can submit a new one.`)) review(false); };
+      row.appendChild(yes); row.appendChild(no);
+      d.appendChild(row);
+    }
+    return d;
+  }
+  const sigOf = (m, v) => (m.type === 'task' ? m.status + (canReview(v) ? ':r' : '') : '');
   function renderMessages(v) {
     const box = $('g-messages');
     const key = v.code + ':' + v.round;
-    const overlap = v.messages.some((m) => renderedMsgIds.has(m.id));
-    if (key !== renderedKey || (renderedMsgIds.size && !overlap)) {
-      box.innerHTML = ''; renderedMsgIds.clear(); renderedKey = key;
+    const overlap = v.messages.some((m) => rendered.has(m.id));
+    if (key !== renderedKey || (rendered.size && !overlap)) {
+      box.innerHTML = ''; rendered.clear(); renderedKey = key;
     }
     const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 140;
     let added = false;
+    const live = new Set();
     for (const m of v.messages) {
-      if (renderedMsgIds.has(m.id)) continue;
-      box.appendChild(msgEl(m, v)); renderedMsgIds.add(m.id); added = true;
+      live.add(m.id);
+      const sig = sigOf(m, v);
+      const r = rendered.get(m.id);
+      if (r) {
+        if (r.sig !== sig) { const n = msgEl(m, v); r.node.replaceWith(n); rendered.set(m.id, { node: n, sig }); }
+        continue;
+      }
+      const n = msgEl(m, v); box.appendChild(n); rendered.set(m.id, { node: n, sig }); added = true;
     }
+    for (const [mid, r] of rendered) if (!live.has(mid)) { r.node.remove(); rendered.delete(mid); }
     if (added) {
       if (nearBottom) box.scrollTop = box.scrollHeight;
       if (tab !== 'chat') { unreadChat = true; updateChatBadge(); }
     }
   }
 
-  function renderTasks(v) {
-    const ul = $('g-tasks'); ul.innerHTML = '';
+  // Each player's own tasks, pinned at the top of the chat as a checklist.
+  function renderChecklist(v) {
+    const box = $('g-checklist');
     const tasks = (v.me && v.me.tasks) || [];
-    if (!tasks.length) { ul.appendChild(el('li', null, v.status === 'lobby' ? 'Your tasks will show up when the game starts.' : 'No tasks.')); return; }
+    const visible = !v.isHost && tasks.length > 0 && v.status !== 'lobby';
+    box.classList.toggle('hidden', !visible);
+    if (!visible) return;
+    const done = tasks.filter((t) => t.done).length;
+    $('cl-title').textContent = `✅ Your tasks · ${done}/${tasks.length} done`;
+    $('cl-caret').textContent = checklistOpen ? '▾' : '▸';
+    const ul = $('g-tasks'); ul.classList.toggle('hidden', !checklistOpen); ul.innerHTML = '';
+    const canSubmit = ['playing', 'meeting'].includes(v.status);
     for (const t of tasks) {
-      const li = el('li', t.done ? 'done' : '');
-      li.appendChild(el('span', 'check', t.done ? '✓' : ''));
-      li.appendChild(el('span', 't', t.text));
+      const li = el('li', t.done ? 'done' : t.pending ? 'pending' : '');
+      li.appendChild(el('span', 'check', t.done ? '✓' : t.pending ? '⏳' : ''));
+      li.appendChild(el('span', 't grow', t.text));
+      if (!t.done && !t.pending && canSubmit) {
+        const b = el('button', 'btn small primary', '📸 Submit');
+        b.onclick = () => openTaskSheet(t);
+        li.appendChild(b);
+      } else if (t.pending) li.appendChild(el('span', 'tag-state', 'with hosts'));
       ul.appendChild(li);
+    }
+  }
+  $('cl-head').onclick = () => { checklistOpen = !checklistOpen; LS.set('sus:clOpen', checklistOpen); if (view) renderChecklist(view); };
+
+  function reviewToasts(prev, v) {
+    if (!prev || !prev.me || !v.me || prev.round !== v.round || prev.code !== v.code) return;
+    for (const t of v.me.tasks) {
+      const before = prev.me.tasks.find((x) => x.id === t.id);
+      if (!before) continue;
+      if (!before.done && t.done) { toast(`✅ Approved: ${t.text}`); chime(); }
+      else if (before.pending && !t.pending && !t.done) toast(`❌ A host didn't accept your photo for "${t.text}". Try again.`, 4500);
     }
   }
 
@@ -573,7 +674,77 @@
 
   // ---------- kill video ----------
   let killVictim = null, killFile = null;
-  $('g-video').onclick = () => {
+  const closeActions = () => $('ov-actions').classList.add('hidden');
+  $('g-plus').onclick = () => $('ov-actions').classList.remove('hidden');
+  $('act-cancel').onclick = closeActions;
+  $('ov-actions').addEventListener('click', (e) => { if (e.target.id === 'ov-actions') closeActions(); });
+  $('act-task').onclick = () => { closeActions(); openTaskSheet(null); };
+  $('ov-photo').onclick = () => $('ov-photo').classList.add('hidden');
+
+  // ---------- task photo ----------
+  let tkTask = null, tkBlob = null;
+  function resetTk() {
+    tkBlob = null; $('tk-file').value = '';
+    $('tk-preview').classList.add('hidden'); $('tk-preview').removeAttribute('src');
+    $('tk-send').classList.add('hidden'); $('tk-send').disabled = false; $('tk-bar').classList.add('hidden');
+  }
+  function pickTk(t) {
+    tkTask = t; $('tk-name').textContent = t.text; resetTk();
+    $('tk-step1').classList.add('hidden'); $('tk-step2').classList.remove('hidden');
+  }
+  function openTaskSheet(task) {
+    const v = view; if (!v || !v.me) return;
+    if (!['playing', 'meeting'].includes(v.status)) return toast('You can submit tasks once the game is running.');
+    const open = v.me.tasks.filter((t) => !t.done && !t.pending);
+    if (!open.length) return toast('Nothing left to submit — every task is done or waiting for a host.');
+    const list = $('tk-list'); list.innerHTML = '';
+    for (const t of open) {
+      const b = el('button', 'btn task-pick', t.text);
+      b.onclick = () => pickTk(t);
+      list.appendChild(b);
+    }
+    if (task) pickTk(task); else { $('tk-step1').classList.remove('hidden'); $('tk-step2').classList.add('hidden'); }
+    $('ov-task').classList.remove('hidden');
+  }
+  async function shrinkPhoto(file) {
+    try {
+      const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
+      const scale = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+      const c = document.createElement('canvas');
+      c.width = Math.round(bmp.width * scale); c.height = Math.round(bmp.height * scale);
+      c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+      const blob = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.82));
+      return blob || file;
+    } catch { return file; }
+  }
+  $('tk-close').onclick = () => { $('ov-task').classList.add('hidden'); resetTk(); };
+  $('tk-backstep').onclick = () => { resetTk(); $('tk-step2').classList.add('hidden'); $('tk-step1').classList.remove('hidden'); };
+  $('tk-file').onchange = async (e) => {
+    const f = e.target.files && e.target.files[0]; if (!f) return;
+    tkBlob = await shrinkPhoto(f);
+    const pv = $('tk-preview'); pv.src = URL.createObjectURL(tkBlob); pv.classList.remove('hidden');
+    $('tk-send').classList.remove('hidden');
+  };
+  $('tk-send').onclick = () => {
+    if (!tkBlob || !tkTask) return;
+    $('tk-send').disabled = true; $('tk-bar').classList.remove('hidden'); $('tk-bar-fill').style.width = '0%';
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `/api/task-photo?code=${encodeURIComponent(currentCode)}&task=${encodeURIComponent(tkTask.id)}`);
+    xhr.setRequestHeader('x-player-token', player.token);
+    xhr.setRequestHeader('Content-Type', tkBlob.type || 'image/jpeg');
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable) $('tk-bar-fill').style.width = Math.round((e.loaded / e.total) * 100) + '%'; };
+    xhr.onload = () => {
+      let r = {}; try { r = JSON.parse(xhr.responseText); } catch {}
+      if (xhr.status === 200) { $('ov-task').classList.add('hidden'); resetTk(); toast('Sent! The hosts have been tagged.'); }
+      else { toast(r.error || 'Upload failed.'); $('tk-send').disabled = false; }
+    };
+    xhr.onerror = () => { toast('Upload failed — check your connection.'); $('tk-send').disabled = false; };
+    xhr.send(tkBlob);
+  };
+
+  // ---------- kill video ----------
+  $('act-kill').onclick = () => {
+    closeActions();
     const v = view; if (!v || !v.me) return;
     if (v.status === 'meeting') return toast('Wait until the vote is over.');
     if (v.status !== 'playing') return toast('The game has not started yet.');
@@ -636,7 +807,7 @@
   // ---------- keep the screen awake during a game (needs https, e.g. the hosted version) ----------
   let wakeLock = null;
   async function keepAwake() {
-    if (!('wakeLock' in navigator) || !currentCode || document.visibilityState !== 'visible' || wakeLock) return;
+    if (!('wakeLock' in navigator) || (!currentCode && !host) || document.visibilityState !== 'visible' || wakeLock) return;
     try { wakeLock = await navigator.wakeLock.request('screen'); wakeLock.addEventListener('release', () => { wakeLock = null; }); } catch {}
   }
   document.addEventListener('visibilitychange', keepAwake);

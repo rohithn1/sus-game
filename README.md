@@ -31,11 +31,16 @@ The **Logs** tab also prints the full host link every time the game starts.
 Open the host link on your phone and type your name. That phone is now a host. Send the link to your roommate, or use **Copy host link** on the host screen. **Don't share it with players**: anyone who has it can run games.
 
 ## Playing
-1. On the host screen, tap **+ New game lobby**. The **Host** tab shows a big QR code and a 4-letter code.
+1. **Hosts:** the host link opens an inbox of **all games**. You're automatically a host in every game. Tap **+ New lobby** to get a QR code and 4-letter code (Host tab), and tap any game to jump into its chat.
 2. Players scan the QR (cellular data or any Wi-Fi works) and type their name.
-3. Press **Start game** (3+ players). Everyone gets a 5-second countdown to hide their screen, then sees their role for 3 seconds.
-4. When someone shows you a task photo, open **Players** and tap their task to mark it done.
-5. During a vote, **End vote now** counts the votes so far, in case someone's phone died.
+3. In the game, press **Start game** (3+ players). Everyone gets a 5-second countdown to hide their screen, then sees their role for 3 seconds.
+4. Each player's tasks sit as a **checklist at the top of the chat**. When they finish one, they tap **📸 Submit**, take a photo, and send it. It posts in the chat tagged **@hosts**, and every host's phone gets pinged, even if they're in a different game.
+5. Hosts tap **✓ Approve** or **✕ Reject** right on the photo. Approved tasks tick off the player's checklist. Rejected ones can be resubmitted.
+6. During a vote, **End vote now** counts the votes so far, in case someone's phone died.
+
+## How a game ends
+- **Crew wins** when every imposter is out, or when every crew task is approved before the imposters reach 50/50.
+- **Imposters win** the moment they equal the crew (50/50).
 
 ## Your task list
 Edit `tasks.txt` on GitHub (open it, click the ✏️ pencil, put one task per line, then **Commit**). Render redeploys automatically in a couple of minutes. You can also edit tasks on the host screen, but on the free plan those edits are lost when the server restarts. `tasks.txt` is the permanent list.
