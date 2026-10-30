@@ -222,7 +222,38 @@
       if (currentCode !== t.code) openHostGame(t.code); else setTab('chat');
     });
   });
-  socket.on('taskPool', (tasks) => { if (document.activeElement !== $('hh-tasks')) $('hh-tasks').value = tasks.join('\n'); });
+  // ---------- host task list editor: each task is Shared (one person) or Everyone (each player once) ----------
+  let taskDraft = [], taskPool = [], taskDirty = false;
+  socket.on('taskPool', (tasks) => {
+    taskPool = tasks.map((t) => (typeof t === 'string' ? { text: t, shared: false } : t));
+    if (!taskDirty) { taskDraft = taskPool.map((t) => ({ ...t })); renderTaskEditor(); }
+    if (view && view.isHost) renderControl(view);
+  });
+  function renderTaskEditor() {
+    const box = $('hh-tasks'); box.innerHTML = '';
+    if (!taskDraft.length) box.appendChild(el('p', 'hint', 'No tasks yet. Add one below.'));
+    taskDraft.forEach((t, i) => {
+      const row = el('div', 'task-row');
+      const input = el('input', 'grow'); input.value = t.text; input.maxLength = 140;
+      input.oninput = () => { t.text = input.value; taskDirty = true; };
+      const seg = el('div', 'seg');
+      for (const [val, label] of [[true, 'Shared'], [false, 'Everyone']]) {
+        const b = el('button', 'seg-btn' + (t.shared === val ? ' on' : ''), label); b.type = 'button';
+        b.onclick = () => { t.shared = val; taskDirty = true; renderTaskEditor(); };
+        seg.appendChild(b);
+      }
+      const del = el('button', 'icon-btn small-x', '✕'); del.type = 'button'; del.setAttribute('aria-label', 'Remove task');
+      del.onclick = () => { taskDraft.splice(i, 1); taskDirty = true; renderTaskEditor(); };
+      const top = el('div', 'task-row-top'); top.appendChild(input); top.appendChild(del);
+      row.appendChild(top); row.appendChild(seg);
+      box.appendChild(row);
+    });
+  }
+  $('hh-add-task').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const text = $('hh-new-task').value.trim(); if (!text) return;
+    taskDraft.push({ text, shared: true }); taskDirty = true; $('hh-new-task').value = ''; renderTaskEditor();
+  });
   socket.on('kicked', () => {
     if (demo) { restartDemo(); return; }
     if (host) { currentCode = null; view = null; $('hh-name').textContent = host.name; show('hosthome'); toast('That lobby was deleted.'); return; }
@@ -300,8 +331,9 @@
     openHostGame(r.code);
   };
   $('hh-save-tasks').onclick = async () => {
-    const r = await call('host:setTaskPool', { tasks: $('hh-tasks').value });
-    toast(r.ok ? `Saved ${r.count} tasks.` : r.error);
+    const r = await call('host:setTaskPool', { tasks: taskDraft.filter((t) => t.text.trim()) });
+    if (r.ok) taskDirty = false;
+    toast(r.ok ? `Saved ${r.count} tasks (${r.shared} shared, ${r.count - r.shared} for everyone). New games use them.` : r.error);
   };
   $('hh-copy-link').onclick = async () => {
     const link = `${location.origin}/host/${encodeURIComponent(host.key)}`;
@@ -417,6 +449,10 @@
   function renderBanner(v) {
     const b = $('g-banner'); b.className = 'banner'; b.innerHTML = '';
     const me = v.me;
+    if (v.meeting && v.isHost) {
+      b.appendChild(el('div', null, `🗳️ Players are voting (${v.meeting.votedIds.length} of ${v.meeting.voterCount} in). Keep approving tasks. You can end the vote from the Host tab.`));
+      return;
+    }
     if (v.meeting && meetingHidden) {
       b.classList.add('win-imp');
       b.appendChild(el('div', null, '🚨 A vote is happening. '));
@@ -468,7 +504,9 @@
     const mine = !v.isHost && v.me && m.from === v.me.id;
     const d = el('div', 'msg task' + (mine ? ' mine' : ''));
     const head = el('div', 'task-head');
-    head.appendChild(el('span', 'grow', `📸 ${mine ? 'You' : m.name} submitted a task`));
+    head.appendChild(el('span', 'grow', `📸 ${mine ? 'You' : m.name} submitted ${m.shared ? 'a shared task' : 'a task'}`));
+    const sender = v.isHost && v.players.find((p) => p.id === m.from);
+    if (sender && sender.role === 'imposter' && m.status === 'pending') head.appendChild(el('span', 'imp-flag', 'imposter'));
     head.appendChild(el('span', 'tag-hosts', '@hosts'));
     d.appendChild(head);
     d.appendChild(el('div', 'task-text', m.taskText));
@@ -528,27 +566,40 @@
   }
 
   // Each player's own tasks, pinned at the top of the chat as a checklist.
+  // Shared tasks (anyone can finish them for the group) + this player's own "everyone" tasks.
   function renderChecklist(v) {
     const box = $('g-checklist');
-    const tasks = (v.me && v.me.tasks) || [];
-    const visible = !v.isHost && tasks.length > 0 && v.status !== 'lobby';
+    const mine = (v.me && v.me.tasks) || [];
+    const shared = v.sharedTasks || [];
+    const visible = !v.isHost && (mine.length + shared.length) > 0 && v.status !== 'lobby' && !!v.me;
     box.classList.toggle('hidden', !visible);
     if (!visible) return;
-    const done = tasks.filter((t) => t.done).length;
-    $('cl-title').textContent = `✅ Your tasks · ${done}/${tasks.length} done`;
+    const all = shared.concat(mine);
+    const done = all.filter((t) => t.done).length;
+    $('cl-title').textContent = `✅ Tasks · ${done}/${all.length} done`;
     $('cl-caret').textContent = checklistOpen ? '▾' : '▸';
     const ul = $('g-tasks'); ul.classList.toggle('hidden', !checklistOpen); ul.innerHTML = '';
     const canSubmit = ['playing', 'meeting'].includes(v.status);
-    for (const t of tasks) {
+    const row = (t) => {
       const li = el('li', t.done ? 'done' : t.pending ? 'pending' : '');
       li.appendChild(el('span', 'check', t.done ? '✓' : t.pending ? '⏳' : ''));
-      li.appendChild(el('span', 't grow', t.text));
+      const txt = el('span', 't grow', t.text);
+      if (t.shared && t.done && t.doneBy) txt.appendChild(el('span', 'done-by', ` — ${t.doneBy}`));
+      li.appendChild(txt);
       if (!t.done && !t.pending && canSubmit) {
         const b = el('button', 'btn small primary', '📸 Submit');
         b.onclick = () => openTaskSheet(t);
         li.appendChild(b);
-      } else if (t.pending) li.appendChild(el('span', 'tag-state', 'with hosts'));
-      ul.appendChild(li);
+      } else if (t.pending) li.appendChild(el('span', 'tag-state', t.shared && t.pendingBy !== v.me.id ? 'someone sent it' : 'with hosts'));
+      return li;
+    };
+    if (shared.length) {
+      ul.appendChild(el('li', 'cl-section', '👥 Shared — one person does it for everyone'));
+      for (const t of shared) ul.appendChild(row(t));
+    }
+    if (mine.length) {
+      ul.appendChild(el('li', 'cl-section', '🙋 Yours — everyone does these'));
+      for (const t of mine) ul.appendChild(row(t));
     }
   }
   $('cl-head').onclick = () => { checklistOpen = !checklistOpen; LS.set('sus:clOpen', checklistOpen); if (view) renderChecklist(view); };
@@ -609,6 +660,12 @@
       if (!before.done && t.done) { toast(`✅ Approved: ${t.text}`); chime(); }
       else if (before.pending && !t.pending && !t.done) toast(`❌ A host didn't accept your photo for "${t.text}". Try again.`, 4500);
     }
+    for (const t of v.sharedTasks || []) {
+      const before = (prev.sharedTasks || []).find((x) => x.id === t.id);
+      if (!before || before.pendingBy !== v.me.id) continue;
+      if (!before.done && t.done) { toast(`✅ Approved: ${t.text} — done for everyone`); chime(); }
+      else if (!t.pending && !t.done) toast(`❌ A host didn't accept your photo for "${t.text}". Try again.`, 4500);
+    }
   }
 
   function stateLabel(p) { return p.dead ? '💀 killed' : p.ejected ? '🚫 voted off' : ''; }
@@ -618,6 +675,23 @@
     const players = v.players.slice();
     if (v.isHost) players.sort((a, b) => a.name.localeCompare(b.name));
     if (!players.length) box.appendChild(el('p', 'hint', 'No players yet.'));
+    if (v.isHost && (v.sharedTasks || []).length && v.status !== 'lobby') {
+      const c = el('div', 'pcard shared-card');
+      const head = el('div', 'pcard-head'); head.appendChild(el('span', 'pcard-name grow', '👥 Shared tasks'));
+      head.appendChild(el('span', 'tag-state', 'one person does each'));
+      c.appendChild(head);
+      const list = el('div', 'ptasks');
+      for (const t of v.sharedTasks) {
+        const b = el('button', 'ptask' + (t.done ? ' done' : ''));
+        b.appendChild(el('span', 'check', t.done ? '✓' : t.pending ? '⏳' : ''));
+        b.appendChild(el('span', 'grow', t.text + (t.done && t.doneBy ? ` — ${t.doneBy}` : '')));
+        b.disabled = v.status === 'ended';
+        b.onclick = async () => { const r = await call('host:toggleTask', { code: v.code, playerId: null, taskId: t.id }); if (!r.ok) toast(r.error); };
+        list.appendChild(b);
+      }
+      c.appendChild(list);
+      box.appendChild(c);
+    }
     for (const p of players) {
       const c = el('div', 'pcard');
       const head = el('div', 'pcard-head');
@@ -654,7 +728,9 @@
     if (qr.getAttribute('src') !== src) qr.setAttribute('src', src);
     $('c-code').textContent = v.code;
     $('c-url').textContent = v.joinUrl;
-    if (document.activeElement !== $('c-tpp')) $('c-tpp').value = v.settings.tasksPerPlayer;
+    const nShared = taskPool.filter((t) => t.shared).length, nEvery = taskPool.length - nShared;
+    $('c-tasks-info').textContent = `Task list: ${nShared} shared, ${nEvery} for everyone. Edit it under All games → Host settings. Changes apply to the next game started.`;
+    $('c-tasks-info').classList.toggle('hidden', !!(host && host.demo));
     const s = v.status;
     $('c-start').classList.toggle('hidden', !(s === 'lobby' || s === 'ended'));
     $('c-start').textContent = s === 'ended' ? 'Play again (same players)' : `Start game (${v.players.length} players)`;
@@ -662,7 +738,6 @@
     $('c-lobby').classList.toggle('hidden', s === 'lobby');
     $('c-endgame').classList.toggle('hidden', !['reveal', 'playing', 'meeting'].includes(s));
   }
-  $('c-tpp').onchange = async (e) => { const r = await call('host:settings', { code: currentCode, tasksPerPlayer: e.target.value }); if (!r.ok) toast(r.error); };
   $('c-start').onclick = async () => {
     const r = await call('host:start', { code: currentCode });
     if (!r.ok) return toast(r.error);
@@ -735,6 +810,8 @@
   function renderMeeting(v) {
     const ov = $('ov-meeting');
     const m = v.meeting;
+    // Hosts never get the death alarm or the vote screen. They keep a quiet view for approving tasks.
+    if (v.isHost) { ov.classList.add('hidden'); shownMeetingId = null; $('mt-video').innerHTML = ''; return; }
     if (!m) { ov.classList.add('hidden'); shownMeetingId = null; meetingHidden = false; $('mt-video').innerHTML = ''; return; }
     if (overlayBusy) return; // role reveal is on screen; show the meeting right after
     if (m.id !== shownMeetingId) {
@@ -786,6 +863,7 @@
 
   // ---------- result + game over popups ----------
   function queueOverlays(v) {
+    if (v.isHost) return; // no vote-result or game-over popups for hosts; it's all in the chat
     if (overlayBusy || !$('ov-result').classList.contains('hidden')) return;
     if (v.status === 'reveal') return;
     const seen = seenGet(v.code);
@@ -846,11 +924,11 @@
   function openTaskSheet(task) {
     const v = view; if (!v || !v.me) return;
     if (!['playing', 'meeting'].includes(v.status)) return toast('You can submit tasks once the game is running.');
-    const open = v.me.tasks.filter((t) => !t.done && !t.pending);
+    const open = (v.sharedTasks || []).concat(v.me.tasks).filter((t) => !t.done && !t.pending);
     if (!open.length) return toast('Nothing left to submit — every task is done or waiting for a host.');
     const list = $('tk-list'); list.innerHTML = '';
     for (const t of open) {
-      const b = el('button', 'btn task-pick', t.text);
+      const b = el('button', 'btn task-pick', (t.shared ? '👥 ' : '🙋 ') + t.text);
       b.onclick = () => pickTk(t);
       list.appendChild(b);
     }

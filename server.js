@@ -34,6 +34,8 @@ function isHostKey(k) {
 }
 
 // Your task list lives in tasks.txt (one per line). In-app edits last until the server restarts.
+// A line starting with [shared] is a shared task: one approved photo from anyone completes it for the group.
+// Every other line is an "everyone" task: each player has to do it once.
 const TASKS_FILE = path.join(ROOT, 'tasks.txt');
 const BUILTIN_TASKS = [
   'Placeholder: Stack 5 cups into a pyramid in the kitchen',
@@ -49,16 +51,27 @@ const BUILTIN_TASKS = [
   'Placeholder: Arrange the couch pillows by color',
   'Placeholder: Open the blinds in the living room',
 ];
+const SHARED_TAG = /^\[shared\]\s*/i;
+const tidy = (x) => String(x || '').replace(/\s+/g, ' ').trim().slice(0, 140);
+function parseTask(t) {
+  if (t && typeof t === 'object') return { text: tidy(t.text), shared: !!t.shared };
+  const line = String(t || '').trim();
+  return { text: tidy(line.replace(SHARED_TAG, '')), shared: SHARED_TAG.test(line) };
+}
+function taskFileText(list) {
+  return '# One task per line. Lines starting with # are ignored.\n' +
+    '# Start a line with [shared] for a task that only one person needs to do. Other tasks must be done by everyone.\n' +
+    list.map((t) => (t.shared ? '[shared] ' : '') + t.text).join('\n') + '\n';
+}
 function loadTaskFile() {
   try {
     const lines = fs.readFileSync(TASKS_FILE, 'utf8').split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
-    if (lines.length) return lines;
+    if (lines.length) return lines.map(parseTask).filter((t) => t.text);
   } catch {}
-  return BUILTIN_TASKS;
+  return BUILTIN_TASKS.map(parseTask);
 }
-const DEFAULT_TASKS = loadTaskFile();
-
 // ---------- state (persisted to data/state.json) ----------
+const DEFAULT_TASKS = loadTaskFile();
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
 let state = { games: {}, taskPool: DEFAULT_TASKS.slice() };
 try {
@@ -126,7 +139,9 @@ function sysMsg(g, text, extra = {}) {
 }
 
 function crewProgress(g) {
-  let done = 0, total = 0;
+  // shared tasks count once for the group; "everyone" tasks count once per crewmate
+  const shared = g.sharedTasks || [];
+  let done = shared.filter((t) => t.done).length, total = shared.length;
   for (const p of Object.values(g.players)) {
     if (p.role !== 'crew') continue;
     total += p.tasks.length;
@@ -159,16 +174,17 @@ function checkWin(g) {
 function startGame(g, opts = {}) {
   const ps = plist(g);
   if (ps.length < 3) throw new Error('Need at least 3 players to start.');
-  const pool = state.taskPool.filter(Boolean);
+  const pool = (opts.pool || state.taskPool).map(parseTask).filter((t) => t.text);
   if (pool.length === 0) throw new Error('The task list is empty. Add tasks first.');
+  const everyone = pool.filter((t) => !t.shared);
+  g.sharedTasks = pool.filter((t) => t.shared).map((t) => ({ id: 's' + id(3), text: t.text, shared: true, done: false, pending: null, pendingBy: null, doneBy: null }));
   const nImp = ps.length <= 5 ? 1 : 2;
   const order = shuffle(ps.map((p) => p.id));
   const imps = new Set(opts.imposters || order.slice(0, nImp));
-  const per = Math.max(1, Math.min(g.settings.tasksPerPlayer, pool.length));
   for (const p of ps) {
     p.role = imps.has(p.id) ? 'imposter' : 'crew';
     p.dead = false; p.ejected = false;
-    p.tasks = shuffle(pool).slice(0, per).map((text) => ({ id: id(3), text, done: false, pending: null }));
+    p.tasks = everyone.map((t) => ({ id: id(3), text: t.text, done: false, pending: null }));
   }
   g.round = (g.round || 0) + 1;
   resetMsgs(g);
@@ -235,7 +251,7 @@ function viewFor(g, who, full) {
   }));
   const v = {
     code: g.code, status: g.status, round: g.round || 0, players,
-    msgEpoch: g.msgEpoch || 0, progress: crewProgress(g),
+    msgEpoch: g.msgEpoch || 0, progress: crewProgress(g), sharedTasks: g.sharedTasks || [],
     settings: g.settings, winner: g.winner, winReason: g.winReason,
     lastResult: g.lastResult,
     joinUrl: `${BASE_URL}/?code=${g.code}`,
@@ -413,18 +429,20 @@ app.post('/api/task-photo', express.raw({ type: () => true, limit: '20mb' }), (r
     const p = g && Object.values(g.players).find((x) => x.token === token);
     if (!g || !p) return res.status(403).json({ error: 'Not in this game.' });
     if (!['playing', 'meeting'].includes(g.status)) return res.status(400).json({ error: 'You can only submit tasks while the game is running.' });
-    const t = (p.tasks || []).find((x) => x.id === clean(req.query.task, 20));
+    const tid = clean(req.query.task, 20);
+    const t = (p.tasks || []).find((x) => x.id === tid) || (g.sharedTasks || []).find((x) => x.id === tid);
     if (!t) return res.status(400).json({ error: 'Pick one of your tasks.' });
-    if (t.done) return res.status(400).json({ error: 'That task is already done.' });
-    if (t.pending) return res.status(400).json({ error: 'That task is already waiting for a host.' });
+    if (t.done) return res.status(400).json({ error: t.shared ? `${t.doneBy || 'Someone'} already finished that shared task.` : 'That task is already done.' });
+    if (t.pending) return res.status(400).json({ error: t.shared ? 'Someone already sent a photo for that shared task. Waiting for a host.' : 'That task is already waiting for a host.' });
     const type = String(req.get('content-type') || '');
     if (!type.startsWith('image/')) return res.status(400).json({ error: 'That file is not a photo.' });
     if (!req.body || !req.body.length) return res.status(400).json({ error: 'No photo received.' });
     const ext = type.includes('png') ? 'png' : type.includes('webp') ? 'webp' : 'jpg';
     const file = `${code}-task-${now()}-${id(3)}.${ext}`;
     fs.writeFileSync(path.join(UPLOAD_DIR, file), req.body);
-    const msg = { id: id(4), type: 'task', from: p.id, name: p.name, taskId: t.id, taskText: t.text, photo: `/uploads/${file}`, status: 'pending', ts: now() };
+    const msg = { id: id(4), type: 'task', from: p.id, name: p.name, taskId: t.id, taskText: t.text, shared: !!t.shared, photo: `/uploads/${file}`, status: 'pending', ts: now() };
     t.pending = msg.id;
+    if (t.shared) t.pendingBy = p.id;
     pushMsg(g, msg);
     io.to(hostRoom(g)).emit('host:tag', { code, msgId: msg.id, name: p.name, taskText: t.text });
     if (g.demo) demoTaskSubmitted(g, msg);
@@ -441,11 +459,14 @@ function reviewTask(g, m, approve, reviewer) {
   if (!m) throw new Error('Submission not found.');
   if (m.status !== 'pending') throw new Error(`Already ${m.status} by ${m.reviewer || 'a host'}.`);
   const p = g.players[m.from];
-  const t = p && p.tasks.find((x) => x.id === m.taskId);
+  const t = m.shared ? (g.sharedTasks || []).find((x) => x.id === m.taskId) : p && p.tasks.find((x) => x.id === m.taskId);
   m.status = approve ? 'approved' : 'rejected';
   m.reviewer = reviewer;
   updMsg(g, m);
-  if (t) { t.pending = null; if (approve) t.done = true; }
+  if (t) {
+    t.pending = null; t.pendingBy = null;
+    if (approve) { t.done = true; if (t.shared) t.doneBy = m.name; }
+  }
   if (approve) checkWin(g);
   broadcast(g); save();
 }
@@ -488,6 +509,13 @@ const BOT_LINES = [
 ];
 const MEETING_LINES = ['it was Dev, I saw him', 'I was with Ana the whole time', 'skip? idk', 'Eli was alone upstairs', 'trust me I was doing tasks'];
 const DEMO_PHOTOS = ['/demo/task1.jpg', '/demo/task2.jpg', '/demo/task3.jpg'];
+const DEMO_TASKS = [
+  { text: 'Demo: Turn on the porch light', shared: true },
+  { text: 'Demo: Stack 5 cups into a pyramid in the kitchen', shared: true },
+  { text: 'Demo: Arrange the couch pillows by color', shared: true },
+  { text: 'Demo: Write your name on a sticky note on the fridge', shared: false },
+  { text: 'Demo: Do 10 jumping jacks', shared: false },
+];
 const DEMO_MAX = 30;
 const pick = (a) => a[crypto.randomInt(0, a.length)];
 const later = (g, ms, fn) => setTimeout(() => { if (state.games[g.code] === g) { try { fn(); } catch (e) { /* game moved on */ } } }, ms);
@@ -513,7 +541,7 @@ function createDemo(kind) {
   const bots = BOT_NAMES.slice(0, kind === 'host' ? 6 : 4).map((n) => add(n, true));
   // imposter demo: you are the only imposter. crew demo: one bot imposter. host demo: two bot imposters.
   const imposters = kind === 'imposter' ? [you.id] : kind === 'crew' ? [pick(bots).id] : shuffle(bots).slice(0, 2).map((b) => b.id);
-  startGame(g, { imposters });
+  startGame(g, { imposters, pool: DEMO_TASKS });
   return { g, you };
 }
 
@@ -546,12 +574,16 @@ function botTick(g) {
     const every = d.kind === 'host' ? 11000 : 22000;
     const waiting = g.messages.filter((m) => m.type === 'task' && m.status === 'pending').length;
     if (t - d.lastSubmit > every && t - d.startedAt > 9000 && waiting < 3) {
-      const cands = ps.filter((p) => p.bot && p.role === 'crew' && p.tasks.some((x) => !x.done && !x.pending));
+      const openShared = (g.sharedTasks || []).filter((x) => !x.done && !x.pending);
+      const cands = ps.filter((p) => p.bot && p.role === 'crew' && (openShared.length || p.tasks.some((x) => !x.done && !x.pending)));
       if (cands.length) {
-        const p = pick(cands); const task = p.tasks.find((x) => !x.done && !x.pending);
+        const p = pick(cands);
+        const mine = p.tasks.filter((x) => !x.done && !x.pending);
+        const task = openShared.length && (!mine.length || crypto.randomInt(0, 2) === 0) ? pick(openShared) : pick(mine);
         d.lastSubmit = t;
-        const msg = { id: id(4), type: 'task', from: p.id, name: p.name, taskId: task.id, taskText: task.text, photo: pick(DEMO_PHOTOS), status: 'pending', ts: t };
+        const msg = { id: id(4), type: 'task', from: p.id, name: p.name, taskId: task.id, taskText: task.text, shared: !!task.shared, photo: pick(DEMO_PHOTOS), status: 'pending', ts: t };
         task.pending = msg.id;
+        if (task.shared) task.pendingBy = p.id;
         pushMsg(g, msg);
         io.to(hostRoom(g)).emit('host:tag', { code: g.code, msgId: msg.id, name: p.name, taskText: task.text });
         demoTaskSubmitted(g, msg);
@@ -809,13 +841,14 @@ io.on('connection', (socket) => {
     const g = hostGame(socket, code);
     if (!['playing', 'meeting', 'reveal'].includes(g.status)) throw new Error('Game is not running.');
     const p = g.players[playerId];
-    const t = p && p.tasks.find((x) => x.id === taskId);
+    const t = playerId ? p && p.tasks.find((x) => x.id === taskId) : (g.sharedTasks || []).find((x) => x.id === taskId);
     if (!t) throw new Error('Task not found.');
     t.done = !t.done;
+    if (t.shared) t.doneBy = t.done ? hostName(socket) + ' (host)' : null;
     if (t.pending) {
       const m = g.messages.find((x) => x.id === t.pending);
-      if (m && t.done) { m.status = 'approved'; m.reviewer = hostName(socket); updMsg(g, m); }
-      t.pending = null;
+      if (m && t.done) { m.status = 'approved'; m.reviewer = hostName(socket); updMsg(g, m); if (t.shared) t.doneBy = m.name; }
+      t.pending = null; t.pendingBy = null;
     }
     checkWin(g);
     broadcast(g); save();
@@ -853,6 +886,7 @@ io.on('connection', (socket) => {
     const g = hostGame(socket, code);
     g.status = 'lobby'; g.meeting = null; g.lastResult = null; g.winner = null; g.winReason = ''; g.pendingKills = [];
     for (const p of Object.values(g.players)) { p.role = null; p.tasks = []; p.dead = false; p.ejected = false; }
+    g.sharedTasks = [];
     resetMsgs(g);
     sysMsg(g, 'Back in the lobby. New players can join now.');
     broadcast(g); save();
@@ -885,13 +919,13 @@ io.on('connection', (socket) => {
 
   on(socket, 'host:setTaskPool', ({ tasks }) => {
     requireHost(socket);
-    const list = (Array.isArray(tasks) ? tasks : String(tasks || '').split('\n')).map((t) => clean(t, 140)).filter(Boolean).slice(0, 200);
+    const list = (Array.isArray(tasks) ? tasks : String(tasks || '').split('\n')).map(parseTask).filter((t) => t.text).slice(0, 200);
     if (!list.length) throw new Error('Add at least one task.');
     state.taskPool = list;
-    fs.writeFile(TASKS_FILE, '# One task per line. Lines starting with # are ignored.\n' + list.join('\n') + '\n', () => {});
+    fs.writeFile(TASKS_FILE, taskFileText(list), () => {});
     io.to('hosts').emit('taskPool', state.taskPool);
     save();
-    return { count: list.length };
+    return { count: list.length, shared: list.filter((t) => t.shared).length };
   });
 
   on(socket, 'host:logout', () => {

@@ -269,3 +269,18 @@ body.demo .demo-only { display: block; }
 .demo-card span { color: var(--muted); font-size: 14px; line-height: 1.45; }
 .demo-card:active { transform: scale(.98); }
 .center-text { text-align: center; max-width: 380px; }
+
+/* ---------- shared / everyone tasks ---------- */
+.task-editor { display: flex; flex-direction: column; gap: 8px; }
+.task-row { background: var(--surface2); border: 1px solid var(--line); border-radius: 12px; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+.task-row-top { display: flex; gap: 8px; align-items: center; }
+.task-row input { padding: 9px 10px; font-size: 15px; }
+.small-x { width: 34px; height: 34px; font-size: 13px; }
+.seg { display: grid; grid-template-columns: 1fr 1fr; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 3px; gap: 3px; }
+.seg-btn { background: none; border: 0; border-radius: 8px; padding: 7px; font-size: 13px; font-weight: 800; color: var(--muted); cursor: pointer; }
+.seg-btn.on { background: var(--cyan); color: #04201d; }
+.cl-section { font-size: 11px !important; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); padding: 8px 12px 6px !important; background: rgba(255,255,255,.02) !important; }
+.done-by { color: var(--muted); font-size: 12px; text-decoration: none; display: inline; }
+.tasklist li.done .done-by { text-decoration: none; }
+.imp-flag { background: var(--red); color: #fff; font-size: 10px; font-weight: 900; text-transform: uppercase; padding: 2px 6px; border-radius: 6px; }
+.shared-card { border-color: rgba(46,230,214,.4); }

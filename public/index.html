@@ -67,9 +67,13 @@
     <summary>Host settings</summary>
     <div class="stack settings-body">
     <h3>Task list</h3>
-    <p class="hint">One task per line. Each player gets a random handful when a game starts.</p>
-    <textarea id="hh-tasks" rows="10"></textarea>
-    <button class="btn" id="hh-save-tasks">Save task list</button>
+    <p class="hint"><b>Shared</b>: one person does it and it's done for the whole group. <b>Everyone</b>: every player has to do it once. All tasks are used in every game.</p>
+    <div id="hh-tasks" class="task-editor"></div>
+    <form id="hh-add-task" class="row">
+      <input id="hh-new-task" class="grow" maxlength="140" placeholder="Add a task…" autocomplete="off">
+      <button class="btn" type="submit">Add</button>
+    </form>
+    <button class="btn primary" id="hh-save-tasks">Save task list</button>
     <h3>Host link</h3>
     <p class="hint">Send this to your co-host. Anyone with it can run games, so don't share it with players.</p>
     <button class="btn" id="hh-copy-link">Copy host link</button>
@@ -132,11 +136,7 @@
         <div class="qr-code-text">Code <b id="c-code"></b></div>
         <div class="hint" id="c-url"></div>
       </div>
-      <div class="row">
-        <label class="grow">Tasks per player
-          <input id="c-tpp" type="number" min="1" max="20">
-        </label>
-      </div>
+      <p class="hint" id="c-tasks-info"></p>
       <button class="btn primary big" id="c-start">Start game</button>
       <button class="btn warn" id="c-endvote">End vote now</button>
       <button class="btn" id="c-lobby">Back to lobby (new players can join)</button>

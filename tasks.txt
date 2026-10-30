@@ -1,14 +1,13 @@
 # One task per line. Lines starting with # are ignored.
-# On GitHub: open tasks.txt, click the pencil, edit, and commit. Render redeploys with your tasks.
-Placeholder: Stack 5 cups into a pyramid in the kitchen
-Placeholder: Fold a towel and leave it on the couch
-Placeholder: Find the remote and put it on the TV stand
-Placeholder: Draw a smiley face on the whiteboard
-Placeholder: Turn on the porch light
-Placeholder: Line up 3 shoes by the front door
-Placeholder: Fill a glass of water and leave it on the counter
+# Start a line with [shared] for a task that only one person needs to do. Other tasks must be done by everyone.
+[shared] Placeholder: Stack 5 cups into a pyramid in the kitchen
+[shared] Placeholder: Fold a towel and leave it on the couch
+[shared] Placeholder: Find the remote and put it on the TV stand
+[shared] Placeholder: Draw a smiley face on the whiteboard
+[shared] Placeholder: Turn on the porch light
+[shared] Placeholder: Line up 3 shoes by the front door
+[shared] Placeholder: Arrange the couch pillows by color
+[shared] Placeholder: Open the blinds in the living room
+Placeholder: Write your name on a sticky note on the fridge
 Placeholder: Make a paper airplane
 Placeholder: Do 10 jumping jacks (filmed or witnessed)
-Placeholder: Write your name on a sticky note on the fridge
-Placeholder: Arrange the couch pillows by color
-Placeholder: Open the blinds in the living room

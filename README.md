@@ -35,7 +35,7 @@ Open the host link on your phone and type your name. That phone is now a host. S
 2. Players scan the QR (cellular data or any Wi-Fi works) and type their name.
 3. In the game, press **Start game** (3+ players). Everyone gets a 5-second countdown to hide their screen, then sees their role for 3 seconds.
 4. Each player's tasks sit as a **checklist at the top of the chat**. When they finish one, they tap **📸 Submit**, take a photo, and send it. It posts in the chat tagged **@hosts**, and every host's phone gets pinged, even if they're in a different game.
-5. Hosts tap **✓ Approve** or **✕ Reject** right on the photo. Approved tasks tick off the player's checklist. Rejected ones can be resubmitted.
+5. Hosts tap **✓ Approve** or **✕ Reject** right on the photo. Hosts never get the death alarm or vote screen; they just see a small "players are voting" note and keep approving. Approved tasks tick off the player's checklist. Rejected ones can be resubmitted.
 6. During a vote, **End vote now** counts the votes so far, in case someone's phone died.
 
 ## How a game ends
@@ -43,7 +43,13 @@ Open the host link on your phone and type your name. That phone is now a host. S
 - **Imposters win** the moment they equal the crew (50/50).
 
 ## Your task list
-Edit `tasks.txt` on GitHub (open it, click the ✏️ pencil, put one task per line, then **Commit**). Render redeploys automatically in a couple of minutes. You can also edit tasks on the host screen, but on the free plan those edits are lost when the server restarts. `tasks.txt` is the permanent list.
+Each task is one of two types:
+- **Shared**: one person does it, and once a host approves the photo it's done for the whole group.
+- **Everyone**: every player has to do it once.
+
+Every task is used in every game. Edit them on the host screen under **All games → Host settings**: add tasks, flip each one between **Shared** and **Everyone**, then tap **Save**. On the free plan, in-app edits are lost when the server restarts, so for a permanent list edit `tasks.txt` on GitHub (put `[shared]` at the start of a line to make it shared).
+
+With 100 people, every "Everyone" task means 100 photos to approve, so keep most tasks Shared.
 
 ## Free plan quirks (good to know)
 - **It sleeps after 15 minutes with nobody on the page.** The first visit after that takes about a minute to wake up. Open your host link a few minutes before people arrive.
