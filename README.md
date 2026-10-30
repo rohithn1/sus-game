@@ -50,9 +50,16 @@ Edit `tasks.txt` on GitHub (open it, click the ✏️ pencil, put one task per l
 - **Sleeping or restarting wipes lobbies, chat and kill videos.** Just make a new lobby. While anyone has the game open, it stays awake.
 - Each month includes 750 free hours, which is plenty for one game.
 
+## Try it alone first (demo links)
+Open **https://sus-game.onrender.com/demo** on your phone to get three private practice games with bots. Nothing in them touches real games:
+- **/demo/imposter**: you're the imposter. Upload a kill video and tag who's in it. Host Bot approves it after 5 seconds, then the alarm and vote.
+- **/demo/crew**: you're crew. Submit task photos and Host Bot approves them after 5 seconds. A bot imposter strikes about a minute in.
+- **/demo/host**: bots submit task photos and kill videos, and you approve them.
+Each demo has "use a sample" buttons, so you don't need to film anything. Tap **Restart** for a fresh one.
+
 ## Rules the app enforces
 - 5 or fewer players get 1 imposter. 6 or more get 2, and imposters see who their partner is.
-- **Kills:** the imposter taps ＋ → **Post a kill video**, picks the victim, and records a video of **at least 5 seconds** (shorter ones are refused). The phone shrinks it, then it goes **only to the hosts**. When a host taps **Approve kill**, the victim is out, the video posts in the chat from **🔪 Imposters**, and every phone alarms with an **Emergency Meeting**. If a host rejects it, nothing happens and the imposter can record again. Every player has the ＋ button, so having it gives nobody away.
+- **Kills:** the imposter films the kill with their normal camera, then taps ＋ → **Post a kill video**, uploads it from their camera roll (**at least 5 seconds**; shorter ones are refused), and tags the one person in it from a dropdown. The phone shrinks it, then it goes **only to the hosts**. When a host taps **Approve kill**, the victim is out, the video posts in the chat from **🔪 Anonymous imposter**, and every phone alarms with an **Emergency Meeting**. If a host rejects it, nothing happens and the imposter can record again. Every player has the ＋ button, so having it gives nobody away.
 - Everyone still in the game votes, imposters included. Votes are final, the most votes is booted, and a tie boots nobody. The app announces whether the booted player was an imposter.
 - Killed and voted-off players can read the chat but can't talk or vote.
 - Players can **hold "my role"** in the top bar to check their role again.
