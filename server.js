@@ -282,10 +282,11 @@ app.get('/api/info', (req, res) => res.json({ baseUrl: BASE_URL }));
 const HAS_FFMPEG = spawnSync('ffmpeg', ['-version']).status === 0;
 function transcode(input, output) {
   return new Promise((resolve) => {
-    const p = spawn('ffmpeg', ['-y', '-i', input, '-t', '7', '-vf', 'scale=-2:min(720\\,ih)',
-      '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '28', '-pix_fmt', 'yuv420p',
+    // Small cloud servers are slow, so keep it quick: 480p, ultrafast, give up after 20s and use the original.
+    const p = spawn('ffmpeg', ['-y', '-i', input, '-t', '7', '-vf', 'scale=-2:min(480\\,ih)',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28', '-pix_fmt', 'yuv420p',
       '-c:a', 'aac', '-b:a', '96k', '-movflags', '+faststart', output], { stdio: 'ignore' });
-    const t = setTimeout(() => { p.kill('SIGKILL'); resolve(false); }, 45000);
+    const t = setTimeout(() => { p.kill('SIGKILL'); resolve(false); }, 20000);
     p.on('close', (code) => { clearTimeout(t); resolve(code === 0); });
     p.on('error', () => { clearTimeout(t); resolve(false); });
   });
