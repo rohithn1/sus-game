@@ -27,6 +27,17 @@
   </form>
 </section>
 
+<!-- ============ DEMO PICKER ============ -->
+<section id="scr-demo" class="screen center hidden">
+  <div class="brand"><div class="logo small">SUS</div><div class="tag">test drive</div></div>
+  <div class="stack demo-list">
+    <a class="demo-card" href="/demo/imposter"><b>🔪 Imposter</b><span>You're the imposter with 4 bots. Post a kill video and tag who's in it. Host Bot approves it after 5 seconds, then everyone gets the alarm and votes.</span></a>
+    <a class="demo-card" href="/demo/crew"><b>📸 Crewmate &amp; tasks</b><span>You're crew. Submit task photos from your checklist and Host Bot approves them after 5 seconds. A bot imposter strikes about a minute in.</span></a>
+    <a class="demo-card" href="/demo/host"><b>🧑‍⚖️ Host</b><span>6 bots play. They submit task photos and kill videos, and you approve or reject them.</span></a>
+  </div>
+  <p class="hint center-text">Private practice games with bots. Nothing here touches real games. No camera needed: each demo has "use a sample" buttons.</p>
+</section>
+
 <!-- ============ HOST LOGIN ============ -->
 <section id="scr-hostlogin" class="screen center hidden">
   <div class="brand"><div class="logo small">SUS</div><div class="tag">host link</div></div>
@@ -44,6 +55,7 @@
     <div class="grow"></div>
     <span class="pill host">HOST · <span id="hh-name"></span></span>
   </header>
+  <div class="demo-bar hidden">🧪 <span class="demo-desc grow"></span><button class="demo-restart">Restart</button><a href="/demo">All demos</a></div>
   <div class="scroll pad stack">
     <div class="inbox-head">
       <h2>All games</h2>
@@ -51,7 +63,7 @@
     </div>
     <p class="hint">You're watching every game. You'll get pinged when someone submits a task photo — tap a game to jump in.</p>
     <div id="hh-games" class="inbox"></div>
-    <details class="settings">
+    <details class="settings" id="hh-settings">
     <summary>Host settings</summary>
     <div class="stack settings-body">
     <h3>Task list</h3>
@@ -77,6 +89,7 @@
     <div class="grow"></div>
     <button class="btn small ghost" id="g-peek">Hold: my role</button>
   </header>
+  <div class="demo-bar hidden">🧪 <span class="demo-desc grow"></span><button class="demo-restart">Restart</button><a href="/demo">All demos</a></div>
   <div class="progress-wrap" id="g-progress-wrap">
     <div class="progress"><div class="progress-fill" id="g-progress"></div></div>
     <span id="g-progress-label"></span>
@@ -180,20 +193,19 @@
       <h2>Post a kill</h2>
       <button class="icon-btn" id="kl-close" aria-label="Close">✕</button>
     </div>
-    <div id="kl-step1">
-      <p class="hint">Who did you get?</p>
-      <div id="kl-victims" class="vote-grid"></div>
-    </div>
-    <div id="kl-step2" class="hidden stack">
-      <p>Record a video of <b id="kl-vname"></b> — <b>at least 5 seconds</b>. A host checks it before anyone else sees it.</p>
-      <label class="btn primary big file-btn">🎥 Record video
-        <input type="file" id="kl-file" accept="video/*" capture="environment">
+    <div class="stack">
+      <p class="hint">Film the kill with your normal camera app, then upload it here — <b>at least 5 seconds</b>, one person per video. A host checks it before anyone else sees it.</p>
+      <label class="btn primary big file-btn">🎞️ Choose video from camera roll
+        <input type="file" id="kl-file" accept="video/*">
       </label>
+      <button class="link demo-only" id="kl-sample">Use a sample 6-second clip (demo)</button>
       <video id="kl-preview" class="hidden" playsinline muted loop></video>
       <div class="hint" id="kl-info"></div>
-      <button class="btn danger big hidden" id="kl-send">Post kill</button>
+      <label>Who's in the video?
+        <select id="kl-victim"></select>
+      </label>
+      <button class="btn danger big" id="kl-send" disabled>Post kill</button>
       <div class="upload-bar hidden" id="kl-bar"><div id="kl-bar-fill"></div></div>
-      <button class="link" id="kl-backstep">← Pick someone else</button>
     </div>
   </div>
 </div>
@@ -221,6 +233,7 @@
       <label class="btn primary big file-btn">📸 Take photo
         <input type="file" id="tk-file" accept="image/*" capture="environment">
       </label>
+      <button class="link demo-only" id="tk-sample">Use a sample photo (demo)</button>
       <img id="tk-preview" class="photo-preview hidden" alt="">
       <button class="btn primary big hidden" id="tk-send">Send to hosts for approval</button>
       <div class="upload-bar hidden" id="tk-bar"><div id="tk-bar-fill"></div></div>

@@ -66,6 +66,7 @@ try {
     const loaded = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
     state = { ...state, ...loaded, taskPool: DEFAULT_TASKS.slice() };
     for (const g of Object.values(state.games)) {
+      if (g.demo) { delete state.games[g.code]; continue; }
       if (g.status === 'reveal') g.status = 'playing';
       for (const p of Object.values(g.players)) p.connected = false;
     }
@@ -155,14 +156,14 @@ function checkWin(g) {
 }
 
 // ---------- game actions ----------
-function startGame(g) {
+function startGame(g, opts = {}) {
   const ps = plist(g);
   if (ps.length < 3) throw new Error('Need at least 3 players to start.');
   const pool = state.taskPool.filter(Boolean);
   if (pool.length === 0) throw new Error('The task list is empty. Add tasks first.');
   const nImp = ps.length <= 5 ? 1 : 2;
   const order = shuffle(ps.map((p) => p.id));
-  const imps = new Set(order.slice(0, nImp));
+  const imps = new Set(opts.imposters || order.slice(0, nImp));
   const per = Math.max(1, Math.min(g.settings.tasksPerPlayer, pool.length));
   for (const p of ps) {
     p.role = imps.has(p.id) ? 'imposter' : 'crew';
@@ -174,7 +175,8 @@ function startGame(g) {
   g.meeting = null; g.lastResult = null; g.winner = null; g.winReason = ''; g.pendingKills = [];
   g.status = 'reveal';
   g.revealStartedAt = now();
-  sysMsg(g, `Game started with ${ps.length} players and ${nImp} imposter${nImp > 1 ? 's' : ''}. Split up and do your tasks! When you finish one, tap 📸 Submit on your checklist to send the hosts a photo.`);
+  if (g.demo) g.demo.startedAt = now();
+  sysMsg(g, `Game started with ${ps.length} players and ${imps.size} imposter${imps.size > 1 ? 's' : ''}. Split up and do your tasks! When you finish one, tap 📸 Submit on your checklist to send the hosts a photo.`);
   const round = g.round;
   setTimeout(() => {
     if (g.status === 'reveal' && g.round === round) { g.status = 'playing'; broadcast(g); save(); }
@@ -272,23 +274,24 @@ function preview(m) {
   if (!m) return '';
   if (m.type === 'chat') return `${m.name}: ${m.text}`;
   if (m.type === 'task') return `📸 ${m.name} submitted a task`;
-  if (m.type === 'kill') return `🔪 Imposters: ${m.text}`;
+  if (m.type === 'kill') return `🔪 Anonymous imposter: ${m.text}`;
   return m.text || '';
 }
 // The hosts' inbox: every game, most recent activity first, with how many task photos are waiting.
-function gamesSummary() {
-  return Object.values(state.games)
-    .map((g) => {
-      const last = g.messages[g.messages.length - 1];
-      return {
-        code: g.code, status: g.status, players: Object.keys(g.players).length, createdAt: g.createdAt,
-        pending: g.messages.filter((m) => m.type === 'task' && m.status === 'pending').length,
-        pendingKills: (g.pendingKills || []).filter((k) => k.status === 'processing' || k.status === 'pending').length,
-        last: preview(last), lastTs: last ? last.ts : g.createdAt,
-      };
-    })
-    .sort((a, b) => b.lastTs - a.lastTs);
+function summarize(g) {
+  const last = g.messages[g.messages.length - 1];
+  return {
+    code: g.code, status: g.status, players: Object.keys(g.players).length, createdAt: g.createdAt,
+    pending: g.messages.filter((m) => m.type === 'task' && m.status === 'pending').length,
+    pendingKills: (g.pendingKills || []).filter((k) => k.status === 'processing' || k.status === 'pending').length,
+    last: preview(last), lastTs: last ? last.ts : g.createdAt,
+  };
 }
+function gamesSummary() {
+  return Object.values(state.games).filter((g) => !g.demo).map(summarize).sort((a, b) => b.lastTs - a.lastTs);
+}
+// Real hosts get tagged for real games; a demo game only tags its own demo host.
+const hostRoom = (g) => (g.demo ? 'demohost:' + g.code : 'hosts');
 
 // ---------- server ----------
 const app = express();
@@ -304,6 +307,10 @@ app.get('/host/:key', (req, res) => {
   res.set('Cache-Control', 'no-store').sendFile(path.join(ROOT, 'public', 'index.html'));
 });
 // Upload names are unique, so phones can cache photos and videos forever instead of re-downloading them.
+// Demo links: /demo (pick one), /demo/imposter, /demo/crew, /demo/host
+const sendPage = (req, res) => res.set('Cache-Control', 'no-store').sendFile(path.join(ROOT, 'public', 'index.html'));
+app.get('/demo', sendPage);
+app.get('/demo/:kind', (req, res, next) => (DEMO_KINDS.includes(req.params.kind) ? sendPage(req, res) : next()));
 app.use('/uploads', express.static(UPLOAD_DIR, { immutable: true, maxAge: '7d' }));
 
 app.get('/qr.svg', async (req, res) => {
@@ -377,7 +384,7 @@ app.post('/api/kill', express.raw({ type: () => true, limit: '60mb' }), async (r
     };
     g.pendingKills.push(kill);
     if (g.pendingKills.length > 30) g.pendingKills.splice(0, g.pendingKills.length - 30);
-    io.to('hosts').emit('host:tag', { kind: 'kill', code, name: killer.name, victimName: victim.name });
+    io.to(hostRoom(g)).emit('host:tag', { kind: 'kill', code, name: killer.name, victimName: victim.name });
     broadcast(g, 'hosts'); save();
     res.json({ ok: true });
 
@@ -389,6 +396,7 @@ app.post('/api/kill', express.raw({ type: () => true, limit: '60mb' }), async (r
     }
     kill.video = `/uploads/${file}`;
     if (kill.status === 'processing') kill.status = 'pending';
+    if (g.demo) demoKillReady(g, kill);
     broadcast(g, 'hosts'); save();
   } catch (e) {
     console.error(e);
@@ -418,7 +426,8 @@ app.post('/api/task-photo', express.raw({ type: () => true, limit: '20mb' }), (r
     const msg = { id: id(4), type: 'task', from: p.id, name: p.name, taskId: t.id, taskText: t.text, photo: `/uploads/${file}`, status: 'pending', ts: now() };
     t.pending = msg.id;
     pushMsg(g, msg);
-    io.to('hosts').emit('host:tag', { code, msgId: msg.id, name: p.name, taskText: t.text });
+    io.to(hostRoom(g)).emit('host:tag', { code, msgId: msg.id, name: p.name, taskText: t.text });
+    if (g.demo) demoTaskSubmitted(g, msg);
     broadcast(g); save();
     res.json({ ok: true });
   } catch (e) {
@@ -427,13 +436,183 @@ app.post('/api/task-photo', express.raw({ type: () => true, limit: '20mb' }), (r
   }
 });
 
+function reviewTask(g, m, approve, reviewer) {
+  if (!['playing', 'meeting', 'reveal'].includes(g.status)) throw new Error('The game is not running.');
+  if (!m) throw new Error('Submission not found.');
+  if (m.status !== 'pending') throw new Error(`Already ${m.status} by ${m.reviewer || 'a host'}.`);
+  const p = g.players[m.from];
+  const t = p && p.tasks.find((x) => x.id === m.taskId);
+  m.status = approve ? 'approved' : 'rejected';
+  m.reviewer = reviewer;
+  updMsg(g, m);
+  if (t) { t.pending = null; if (approve) t.done = true; }
+  if (approve) checkWin(g);
+  broadcast(g); save();
+}
+function reviewKill(g, k, approve, reviewer) {
+  if (!k || (k.status !== 'pending' && k.status !== 'processing')) throw new Error('That kill was already handled.');
+  if (!approve) {
+    k.status = 'rejected'; k.reviewer = reviewer;
+    broadcast(g); save();
+    return;
+  }
+  if (k.status === 'processing') throw new Error('The video is still processing. Try again in a moment.');
+  if (g.status === 'meeting') throw new Error('A vote is happening. Approve this after the vote ends.');
+  if (g.status !== 'playing') throw new Error('The game is not running.');
+  const killer = g.players[k.killerId], victim = g.players[k.victimId];
+  if (!killer || !isAlive(killer) || !victim || !isAlive(victim)) {
+    k.status = 'invalid';
+    broadcast(g); save();
+    throw new Error(`Can't approve: ${!killer || !isAlive(killer) ? k.killerName : k.victimName} is already out.`);
+  }
+  k.status = 'approved'; k.reviewer = reviewer;
+  victim.dead = true;
+  pushMsg(g, { id: id(4), type: 'kill', from: 'anonymous', video: k.video, victimId: victim.id, text: `💀 ${victim.name} was killed!`, ts: now() });
+  if (!checkWin(g)) {
+    g.status = 'meeting';
+    g.meeting = { id: id(4), victimId: victim.id, killerId: killer.id, video: k.video, votes: {}, startedAt: now() };
+    sysMsg(g, '🚨 EMERGENCY MEETING — everyone still alive must vote someone off.');
+  }
+  broadcast(g); save();
+}
+
+// ---------- demo mode: /demo/imposter, /demo/crew, /demo/host ----------
+// Each visit creates a private throwaway game full of bots. Demo games never show up for real hosts.
+const DEMO_KINDS = ['imposter', 'crew', 'host'];
+const BOT_NAMES = ['Ana', 'Ben', 'Cat', 'Dev', 'Eli', 'Fay'];
+const BOT_HOST = 'Host Bot';
+const BOT_LINES = [
+  'anyone in the kitchen?', "I'm doing the porch light one", 'where did everyone go lol', 'just finished one 💪',
+  'I saw Cat near the stairs…', 'not me btw', 'this house is way too big', "who's upstairs?",
+  'on my way to the living room', 'Ben is acting kinda sus', 'stay in pairs!!', 'my tasks are all downstairs ugh',
+];
+const MEETING_LINES = ['it was Dev, I saw him', 'I was with Ana the whole time', 'skip? idk', 'Eli was alone upstairs', 'trust me I was doing tasks'];
+const DEMO_PHOTOS = ['/demo/task1.jpg', '/demo/task2.jpg', '/demo/task3.jpg'];
+const DEMO_MAX = 30;
+const pick = (a) => a[crypto.randomInt(0, a.length)];
+const later = (g, ms, fn) => setTimeout(() => { if (state.games[g.code] === g) { try { fn(); } catch (e) { /* game moved on */ } } }, ms);
+
+function endDemo(code) { delete state.games[code]; outbox.delete(code); sentEpoch.delete(code); }
+
+function createDemo(kind) {
+  const demos = Object.values(state.games).filter((x) => x.demo).sort((a, b) => a.createdAt - b.createdAt);
+  while (demos.length >= DEMO_MAX) endDemo(demos.shift().code);
+  const code = newCode();
+  const g = {
+    code, createdAt: now(), status: 'lobby', players: {}, messages: [], meeting: null, lastResult: null,
+    settings: { tasksPerPlayer: 3 }, round: 0, winner: null, winReason: '',
+    demo: { kind, hostToken: id(16), lastChat: now(), lastKill: now(), lastSubmit: now(), voteDelay: {}, said: 0 },
+  };
+  state.games[code] = g;
+  const add = (name, bot) => {
+    const p = { id: id(5), token: id(16), name, joinedAt: now() + Object.keys(g.players).length, role: null, tasks: [], dead: false, ejected: false, connected: true, bot };
+    g.players[p.id] = p; return p;
+  };
+  let you = null;
+  if (kind !== 'host') you = add('You', false);
+  const bots = BOT_NAMES.slice(0, kind === 'host' ? 6 : 4).map((n) => add(n, true));
+  // imposter demo: you are the only imposter. crew demo: one bot imposter. host demo: two bot imposters.
+  const imposters = kind === 'imposter' ? [you.id] : kind === 'crew' ? [pick(bots).id] : shuffle(bots).slice(0, 2).map((b) => b.id);
+  startGame(g, { imposters });
+  return { g, you };
+}
+
+function demoTaskSubmitted(g, msg) {
+  if (g.demo.kind === 'host') return; // in the host demo, you approve everything yourself
+  later(g, 5000, () => { if (msg.status === 'pending') reviewTask(g, msg, true, BOT_HOST); });
+}
+function demoKillReady(g, k) {
+  if (g.demo.kind === 'host') return;
+  const tryApprove = (wait) => later(g, wait, () => {
+    if (k.status !== 'pending') return;
+    if (g.status === 'meeting') return tryApprove(3000); // the bot host waits for the current vote to finish
+    try { reviewKill(g, k, true, BOT_HOST); } catch {}
+  });
+  tryApprove(5000);
+}
+
+function botTick(g) {
+  const d = g.demo, t = now();
+  const ps = Object.values(g.players);
+  const bots = ps.filter((p) => p.bot && isAlive(p));
+  if (g.status === 'playing') {
+    // small talk
+    if (t - d.lastChat > 16000 && d.said < 30 && bots.length && crypto.randomInt(0, 3) === 0) {
+      const b = pick(bots); d.lastChat = t; d.said++;
+      pushMsg(g, { id: id(4), type: 'chat', from: b.id, name: b.name, text: pick(BOT_LINES), ts: t });
+      broadcast(g, 'msgs');
+    }
+    // bot crewmates submit task photos (slowly, so you have time to look around)
+    const every = d.kind === 'host' ? 11000 : 22000;
+    const waiting = g.messages.filter((m) => m.type === 'task' && m.status === 'pending').length;
+    if (t - d.lastSubmit > every && t - d.startedAt > 9000 && waiting < 3) {
+      const cands = ps.filter((p) => p.bot && p.role === 'crew' && p.tasks.some((x) => !x.done && !x.pending));
+      if (cands.length) {
+        const p = pick(cands); const task = p.tasks.find((x) => !x.done && !x.pending);
+        d.lastSubmit = t;
+        const msg = { id: id(4), type: 'task', from: p.id, name: p.name, taskId: task.id, taskText: task.text, photo: pick(DEMO_PHOTOS), status: 'pending', ts: t };
+        task.pending = msg.id;
+        pushMsg(g, msg);
+        io.to(hostRoom(g)).emit('host:tag', { code: g.code, msgId: msg.id, name: p.name, taskText: task.text });
+        demoTaskSubmitted(g, msg);
+        broadcast(g);
+      }
+    }
+    // a bot imposter strikes now and then (crew + host demos)
+    const killEvery = d.kind === 'host' ? 30000 : 45000;
+    const killers = bots.filter((p) => p.role === 'imposter');
+    const open = (g.pendingKills || []).some((k) => k.status === 'pending' || k.status === 'processing');
+    if (killers.length && !open && t - d.lastKill > killEvery && t - d.startedAt > 20000) {
+      const victims = ps.filter((p) => p.role === 'crew' && isAlive(p) && p.bot);
+      if (victims.length) {
+        const killer = pick(killers), victim = pick(victims);
+        d.lastKill = t;
+        const k = { id: id(4), killerId: killer.id, killerName: killer.name, victimId: victim.id, victimName: victim.name, video: '/demo/kill.mp4', seconds: 6, status: 'pending', ts: t };
+        g.pendingKills = g.pendingKills || [];
+        g.pendingKills.push(k);
+        io.to(hostRoom(g)).emit('host:tag', { kind: 'kill', code: g.code, name: killer.name, victimName: victim.name });
+        demoKillReady(g, k);
+        broadcast(g, 'hosts');
+      }
+    }
+  }
+  if (g.status === 'meeting' && g.meeting) {
+    const m = g.meeting;
+    if (d.voteFor !== m.id) { d.voteFor = m.id; d.voteDelay = {}; d.meetingTalk = 0; }
+    for (const b of bots) {
+      if (m.votes[b.id]) continue;
+      if (!d.voteDelay[b.id]) d.voteDelay[b.id] = m.startedAt + 4000 + crypto.randomInt(0, 9000);
+      if (t < d.voteDelay[b.id]) continue;
+      // bots never vote you out in the player demos, so you can keep testing
+      const choices = ps.filter((p) => isAlive(p) && p.id !== b.id && (d.kind === 'host' || p.bot));
+      if (!choices.length) continue;
+      m.votes[b.id] = pick(choices).id;
+    }
+    if (d.meetingTalk < 2 && bots.length && t - m.startedAt > 2500 * (d.meetingTalk + 1)) {
+      const b = pick(bots); d.meetingTalk++;
+      pushMsg(g, { id: id(4), type: 'chat', from: b.id, name: b.name, text: pick(MEETING_LINES), ts: t });
+    }
+    // the bot host closes a vote you forgot about
+    if (d.kind !== 'host' && t - m.startedAt > 60000) resolveMeeting(g, true);
+    else maybeAutoResolve(g);
+    broadcast(g); save();
+  }
+}
+setInterval(() => {
+  for (const g of Object.values(state.games)) {
+    if (!g.demo) continue;
+    if (now() - g.createdAt > 60 * 60 * 1000) { endDemo(g.code); continue; } // demos expire after an hour
+    try { botTick(g); } catch (e) { console.error('demo bot', e.message); }
+  }
+}, 1500);
+
 // ---------- sockets ----------
 function socketsIn(room) {
   const ids = io.sockets.adapter.rooms.get(room);
   return ids ? [...ids].map((sid) => io.sockets.sockets.get(sid)).filter(Boolean) : [];
 }
 function whoOf(socket) {
-  if (socket.data.isHost) return { kind: 'host' };
+  if (socket.data.isHost || socket.data.demoCode) return { kind: 'host' };
   if (socket.data.playerId) return { kind: 'player', playerId: socket.data.playerId };
   return { kind: 'none' };
 }
@@ -471,7 +650,8 @@ function flush(code) {
     if (!full) io.to(room).emit('msgs', { code, epoch, add: b.add, upd: b.upd });
     outbox.delete(code);
   }
-  io.to('hosts').emit('games', gamesSummary());
+  if (g.demo) io.to(hostRoom(g)).emit('games', [summarize(g)]);
+  else io.to('hosts').emit('games', gamesSummary());
 }
 function sendFull(socket, g) { socket.emit('state', viewFor(g, whoOf(socket), true)); }
 
@@ -482,6 +662,12 @@ function gameOr(code) {
   const g = state.games[clean(code, 8).toUpperCase()];
   if (!g) throw new Error('No game with that code.');
   return g;
+}
+// Real hosts can run any game; a demo host can only run their own demo game.
+function hostGame(socket, code) {
+  const g = gameOr(code);
+  if (socket.data.isHost || (socket.data.demoCode && socket.data.demoCode === g.code)) return g;
+  throw new Error('Host login required.');
 }
 function hostName(socket) { return socket.data.hostName || 'Host'; }
 
@@ -602,8 +788,7 @@ io.on('connection', (socket) => {
   });
 
   on(socket, 'host:view', ({ code }) => {
-    requireHost(socket);
-    const g = gameOr(code);
+    const g = hostGame(socket, code);
     for (const room of socket.rooms) if (room.startsWith('game:')) socket.leave(room);
     socket.join('game:' + g.code);
     socket.emit('state', viewFor(g, { kind: 'host' }, true));
@@ -614,16 +799,14 @@ io.on('connection', (socket) => {
   });
 
   on(socket, 'host:start', ({ code }) => {
-    requireHost(socket);
-    const g = gameOr(code);
+    const g = hostGame(socket, code);
     if (g.status !== 'lobby' && g.status !== 'ended') throw new Error('Game already running.');
     startGame(g);
     broadcast(g); save();
   });
 
   on(socket, 'host:toggleTask', ({ code, playerId, taskId }) => {
-    requireHost(socket);
-    const g = gameOr(code);
+    const g = hostGame(socket, code);
     if (!['playing', 'meeting', 'reveal'].includes(g.status)) throw new Error('Game is not running.');
     const p = g.players[playerId];
     const t = p && p.tasks.find((x) => x.id === taskId);
@@ -639,63 +822,27 @@ io.on('connection', (socket) => {
   });
 
   on(socket, 'host:review', ({ code, msgId, approve }) => {
-    requireHost(socket);
-    const g = gameOr(code);
+    const g = hostGame(socket, code);
     if (!['playing', 'meeting', 'reveal'].includes(g.status)) throw new Error('The game is not running.');
     const m = g.messages.find((x) => x.id === msgId && x.type === 'task');
-    if (!m) throw new Error('Submission not found.');
-    if (m.status !== 'pending') throw new Error(`Already ${m.status} by ${m.reviewer || 'a host'}.`);
-    const p = g.players[m.from];
-    const t = p && p.tasks.find((x) => x.id === m.taskId);
-    m.status = approve ? 'approved' : 'rejected';
-    m.reviewer = hostName(socket);
-    updMsg(g, m);
-    if (t) { t.pending = null; if (approve) t.done = true; }
-    if (approve) checkWin(g);
-    broadcast(g); save();
+    reviewTask(g, m, approve, hostName(socket));
   });
 
   on(socket, 'host:reviewKill', ({ code, killId, approve }) => {
-    requireHost(socket);
-    const g = gameOr(code);
+    const g = hostGame(socket, code);
     const k = (g.pendingKills || []).find((x) => x.id === killId);
-    if (!k || (k.status !== 'pending' && k.status !== 'processing')) throw new Error('That kill was already handled.');
-    if (!approve) {
-      k.status = 'rejected'; k.reviewer = hostName(socket);
-      broadcast(g); save();
-      return;
-    }
-    if (k.status === 'processing') throw new Error('The video is still processing. Try again in a moment.');
-    if (g.status === 'meeting') throw new Error('A vote is happening. Approve this after the vote ends.');
-    if (g.status !== 'playing') throw new Error('The game is not running.');
-    const killer = g.players[k.killerId], victim = g.players[k.victimId];
-    if (!killer || !isAlive(killer) || !victim || !isAlive(victim)) {
-      k.status = 'invalid';
-      broadcast(g); save();
-      throw new Error(`Can't approve: ${!killer || !isAlive(killer) ? k.killerName : k.victimName} is already out.`);
-    }
-    k.status = 'approved'; k.reviewer = hostName(socket);
-    victim.dead = true;
-    pushMsg(g, { id: id(4), type: 'kill', from: 'imposters', video: k.video, victimId: victim.id, text: `💀 ${victim.name} was killed!`, ts: now() });
-    if (!checkWin(g)) {
-      g.status = 'meeting';
-      g.meeting = { id: id(4), victimId: victim.id, killerId: killer.id, video: k.video, votes: {}, startedAt: now() };
-      sysMsg(g, '🚨 EMERGENCY MEETING — everyone still alive must vote someone off.');
-    }
-    broadcast(g); save();
+    reviewKill(g, k, approve, hostName(socket));
   });
 
   on(socket, 'host:endVote', ({ code }) => {
-    requireHost(socket);
-    const g = gameOr(code);
+    const g = hostGame(socket, code);
     if (!g.meeting) throw new Error('No vote is happening.');
     resolveMeeting(g, true);
     broadcast(g); save();
   });
 
   on(socket, 'host:endGame', ({ code }) => {
-    requireHost(socket);
-    const g = gameOr(code);
+    const g = hostGame(socket, code);
     if (g.status === 'lobby') throw new Error('Game has not started.');
     g.status = 'ended'; g.meeting = null; g.winner = null; g.winReason = 'The host ended the game.'; g.pendingKills = [];
     sysMsg(g, 'The host ended the game.');
@@ -703,8 +850,7 @@ io.on('connection', (socket) => {
   });
 
   on(socket, 'host:toLobby', ({ code }) => {
-    requireHost(socket);
-    const g = gameOr(code);
+    const g = hostGame(socket, code);
     g.status = 'lobby'; g.meeting = null; g.lastResult = null; g.winner = null; g.winReason = ''; g.pendingKills = [];
     for (const p of Object.values(g.players)) { p.role = null; p.tasks = []; p.dead = false; p.ejected = false; }
     resetMsgs(g);
@@ -713,8 +859,7 @@ io.on('connection', (socket) => {
   });
 
   on(socket, 'host:kick', ({ code, playerId }) => {
-    requireHost(socket);
-    const g = gameOr(code);
+    const g = hostGame(socket, code);
     const p = g.players[playerId];
     if (!p) throw new Error('Player not found.');
     if (g.status !== 'lobby' && g.status !== 'ended') throw new Error('You can only remove players in the lobby.');
@@ -725,8 +870,7 @@ io.on('connection', (socket) => {
   });
 
   on(socket, 'host:deleteGame', ({ code }) => {
-    requireHost(socket);
-    const g = gameOr(code);
+    const g = hostGame(socket, code);
     for (const s of socketsIn('game:' + g.code)) { s.emit('kicked'); s.leave('game:' + g.code); }
     delete state.games[g.code];
     io.to('hosts').emit('games', gamesSummary());
@@ -734,8 +878,7 @@ io.on('connection', (socket) => {
   });
 
   on(socket, 'host:settings', ({ code, tasksPerPlayer }) => {
-    requireHost(socket);
-    const g = gameOr(code);
+    const g = hostGame(socket, code);
     g.settings.tasksPerPlayer = Math.max(1, Math.min(20, Number(tasksPerPlayer) || 4));
     broadcast(g); save();
   });
@@ -756,9 +899,40 @@ io.on('connection', (socket) => {
     socket.leave('hosts');
   });
 
+  // ---- demo mode ----
+  on(socket, 'demo:start', ({ kind }) => {
+    if (!DEMO_KINDS.includes(kind)) throw new Error('Unknown demo.');
+    const { g, you } = createDemo(kind);
+    if (kind === 'host') {
+      socket.data.demoCode = g.code; socket.data.hostName = 'You';
+      socket.join(hostRoom(g));
+      socket.emit('games', [summarize(g)]);
+      broadcast(g);
+      return { kind, code: g.code, demoToken: g.demo.hostToken };
+    }
+    socket.data.code = g.code; socket.data.playerId = you.id;
+    socket.join('game:' + g.code);
+    sendFull(socket, g);
+    return { kind, code: g.code, token: you.token, playerId: you.id };
+  });
+  on(socket, 'demo:hostResume', ({ code, demoToken }) => {
+    const g = gameOr(code);
+    if (!g.demo || g.demo.hostToken !== demoToken) throw new Error('That demo has ended.');
+    socket.data.demoCode = g.code; socket.data.hostName = 'You';
+    socket.join(hostRoom(g));
+    socket.emit('games', [summarize(g)]);
+    return { code: g.code };
+  });
+  on(socket, 'demo:end', ({ code, token, demoToken }) => {
+    const g = state.games[clean(code, 8).toUpperCase()];
+    if (!g || !g.demo) return;
+    const you = Object.values(g.players).find((p) => !p.bot);
+    if ((demoToken && demoToken === g.demo.hostToken) || (token && you && token === you.token)) endDemo(g.code);
+  });
+
   // A phone that missed an update (or saw a history reset) asks for the full chat again.
   on(socket, 'resync', () => {
-    const g = state.games[socket.data.code] || (socket.data.isHost && [...socket.rooms].find((r) => r.startsWith('game:')) && state.games[[...socket.rooms].find((r) => r.startsWith('game:')).slice(5)]);
+    const g = state.games[socket.data.code] || ((socket.data.isHost || socket.data.demoCode) && [...socket.rooms].find((r) => r.startsWith('game:')) && state.games[[...socket.rooms].find((r) => r.startsWith('game:')).slice(5)]);
     if (g) sendFull(socket, g);
   });
 

@@ -2,11 +2,22 @@
 (() => {
   const socket = io({ transports: ['websocket', 'polling'] });
   const $ = (id) => document.getElementById(id);
+  // Demo links (/demo, /demo/imposter, /demo/crew, /demo/host) run throwaway bot games
+  // and never touch this phone's real host or player session.
+  const demoMatch = location.pathname.match(/^\/demo(?:\/(imposter|crew|host))?\/?$/);
+  const demoPicker = !!demoMatch && !demoMatch[1];
+  const demoKind = demoMatch ? demoMatch[1] || null : null;
+  const LOCKED = demoMatch ? new Set(['sus:player', 'sus:host']) : new Set();
   const LS = {
     get(k) { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } },
-    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
-    del(k) { try { localStorage.removeItem(k); } catch {} },
+    set(k, v) { if (LOCKED.has(k)) return; try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+    del(k) { if (LOCKED.has(k)) return; try { localStorage.removeItem(k); } catch {} },
   };
+  let demo = null; // { kind, code, token, playerId } or { kind: 'host', code, demoToken }
+  if (demoKind) {
+    try { demo = JSON.parse(sessionStorage.getItem('sus:demo')); } catch {}
+    if (demo && demo.kind !== demoKind) { socket.emit('demo:end', demo); demo = null; }
+  }
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 
   let host = LS.get('sus:host');          // { key, name }
@@ -19,6 +30,7 @@
     history.replaceState(null, '', '/');
   }
   let player = LS.get('sus:player');      // { code, token, playerId }
+  if (demoMatch) { host = null; player = null; document.body.classList.add('demo'); }
   let currentCode = null;
   let view = null;
   let tab = 'chat';
@@ -40,7 +52,7 @@
   if (player && urlCode && player.code !== urlCode && !host) { LS.del('sus:player'); player = null; }
 
   // ---------- screens ----------
-  const SCREENS = ['join', 'hostlogin', 'hosthome', 'game'];
+  const SCREENS = ['join', 'hostlogin', 'hosthome', 'game', 'demo'];
   function show(name) {
     for (const s of SCREENS) $('scr-' + s).classList.toggle('hidden', s !== name);
     if (name !== 'game') for (const o of ['ov-meeting', 'ov-result', 'ov-reveal', 'ov-kill', 'ov-peek']) $(o).classList.add('hidden');
@@ -97,6 +109,7 @@
 
   // ---------- connection ----------
   socket.on('connect', async () => {
+    if (demoMatch) return bootDemo(false);
     if (host) {
       if (!host.name) { show('hostlogin'); return; }
       const r = await call('host:login', { key: host.key, name: host.name });
@@ -119,6 +132,64 @@
     show('game');
   }
   socket.on('disconnect', () => { if (currentCode) toast('Reconnecting…', 1500); });
+
+  // ---------- demo mode ----------
+  const DEMO_DESC = {
+    imposter: 'Imposter demo · Host Bot approves kills in 5s',
+    crew: 'Crewmate demo · Host Bot approves tasks in 5s',
+    host: 'Host demo · bots submit, you approve',
+  };
+  async function bootDemo(fresh) {
+    if (demoPicker) { show('demo'); return; }
+    if (demo && !fresh) {
+      const r = demo.kind === 'host'
+        ? await call('demo:hostResume', { code: demo.code, demoToken: demo.demoToken })
+        : await call('player:resume', { code: demo.code, token: demo.token });
+      if (r.ok) return enterDemo(false);
+    }
+    const r = await call('demo:start', { kind: demoKind });
+    if (!r.ok) { toast(r.error); show('demo'); return; }
+    demo = r;
+    try { sessionStorage.setItem('sus:demo', JSON.stringify(r)); } catch {}
+    enterDemo(true);
+  }
+  function enterDemo(isNew) {
+    for (const b of document.querySelectorAll('.demo-desc')) b.textContent = DEMO_DESC[demo.kind];
+    for (const b of document.querySelectorAll('.demo-bar')) b.classList.remove('hidden');
+    $('hh-create').classList.add('hidden');
+    $('hh-settings').classList.add('hidden');
+    if (demo.kind === 'host') {
+      host = { demo: true, name: 'You' }; player = null;
+      $('hh-name').textContent = 'You (demo)';
+      if (isNew || !currentCode) openHostGame(demo.code);
+      else socket.emit('host:view', { code: currentCode });
+      return;
+    }
+    host = null;
+    player = { code: demo.code, token: demo.token, playerId: demo.playerId };
+    if (currentCode !== demo.code) { currentCode = demo.code; justOpened = true; }
+    show('game');
+    socket.emit('resync'); // the first state can arrive before we knew which game to show
+  }
+  function resetGameScreen() {
+    clearInterval(revealTimer); overlayBusy = false;
+    for (const o of ['ov-meeting', 'ov-result', 'ov-reveal', 'ov-kill', 'ov-peek', 'ov-task', 'ov-actions']) $(o).classList.add('hidden');
+    view = null; msgs = []; msgCode = null; msgEpoch = null; renderedKey = null; rendered.clear();
+    $('g-messages').innerHTML = ''; $('g-killq').innerHTML = ''; killCards.clear();
+    shownMeetingId = null; meetingHidden = false;
+  }
+  async function restartDemo() {
+    if (demo) socket.emit('demo:end', demo);
+    try { sessionStorage.removeItem('sus:demo'); } catch {}
+    demo = null; currentCode = null; resetGameScreen();
+    toast('Starting a fresh demo…', 1500);
+    bootDemo(true);
+  }
+  for (const b of document.querySelectorAll('.demo-restart')) b.onclick = restartDemo;
+  async function useSample(url, name, type) {
+    const blob = await (await fetch(url)).blob();
+    try { return new File([blob], name, { type }); } catch { return blob; }
+  }
 
   // Chat history is kept on the phone: the full list arrives once, then only small add/update packets.
   let msgs = [], msgEpoch = null, msgCode = null;
@@ -153,6 +224,7 @@
   });
   socket.on('taskPool', (tasks) => { if (document.activeElement !== $('hh-tasks')) $('hh-tasks').value = tasks.join('\n'); });
   socket.on('kicked', () => {
+    if (demo) { restartDemo(); return; }
     if (host) { currentCode = null; view = null; $('hh-name').textContent = host.name; show('hosthome'); toast('That lobby was deleted.'); return; }
     LS.del('sus:player'); player = null; currentCode = null; view = null;
     show('join'); toast('You were removed from the lobby.');
@@ -243,6 +315,7 @@
 
   // ---------- game screen ----------
   $('g-back').onclick = async () => {
+    if (demo && !host) { location.href = '/demo'; return; }
     if (host) {
       socket.emit('host:leaveView'); currentCode = null; view = null;
       $('hh-name').textContent = host.name; show('hosthome'); return;
@@ -285,7 +358,7 @@
       return {
         cls: 'imposter', big: 'IMPOSTER',
         sub: (me.partners.length ? `Your fellow imposter: ${me.partners.join(', ')}. ` : '') +
-          'Kill crewmates without getting caught: tap ＋ → Post a kill video (at least 5 seconds) right after each kill. A host approves it, then everyone is alerted. Your tasks are fake — pretend to do them.',
+          'Kill crewmates without getting caught: one at a time. Film it, then tap ＋ → Post a kill, upload the video (at least 5 seconds), and tag who is in it. A host approves it, then it posts from Anonymous imposter and everyone is alerted. Your tasks are fake — pretend to do them.',
       };
     }
     return { cls: 'crew', big: 'CREWMATE', sub: `Finish your tasks and vote out the imposter${n > 1 ? 's' : ''}. There ${n > 1 ? 'are 2 imposters' : 'is 1 imposter'}.` };
@@ -375,7 +448,7 @@
     if (m.type === 'system') return el('div', 'msg system', m.text);
     if (m.type === 'kill') {
       const d = el('div', 'msg kill');
-      d.appendChild(el('div', 'who imp-who', '🔪 Imposters'));
+      d.appendChild(el('div', 'who imp-who', '🔪 Anonymous imposter'));
       d.appendChild(el('div', 'kill-title', m.text));
       if (!m.video) { d.appendChild(el('div', 'video-wait', '🎬 Video is processing…')); return d; }
       const vid = document.createElement('video');
@@ -527,7 +600,7 @@
     if (!prev || !prev.me || !v.me || prev.round !== v.round || prev.code !== v.code) return;
     for (const k of v.me.myKills || []) {
       const before = (prev.me.myKills || []).find((x) => x.id === k.id);
-      if (before && before.status !== k.status && k.status === 'rejected') toast(`❌ The hosts rejected your kill video of ${k.victimName}. Record a new one if you want.`, 5000);
+      if (before && before.status !== k.status && k.status === 'rejected') toast(`❌ The hosts rejected your kill video of ${k.victimName}. Upload a new one if you want.`, 5000);
       if (before && before.status !== k.status && k.status === 'invalid') toast(`Your kill of ${k.victimName} couldn't be approved — they're already out.`, 5000);
     }
     for (const t of v.me.tasks) {
@@ -797,12 +870,15 @@
   }
   $('tk-close').onclick = () => { $('ov-task').classList.add('hidden'); resetTk(); };
   $('tk-backstep').onclick = () => { resetTk(); $('tk-step2').classList.add('hidden'); $('tk-step1').classList.remove('hidden'); };
-  $('tk-file').onchange = async (e) => {
-    const f = e.target.files && e.target.files[0]; if (!f) return;
+  $('tk-sample').onclick = async () => handleTaskFile(await useSample(pick(['/demo/task1.jpg', '/demo/task2.jpg', '/demo/task3.jpg']), 'sample.jpg', 'image/jpeg'));
+  const pick = (a) => a[Math.floor(Math.random() * a.length)];
+  $('tk-file').onchange = (e) => handleTaskFile(e.target.files && e.target.files[0]);
+  async function handleTaskFile(f) {
+    if (!f) return;
     tkBlob = await shrinkPhoto(f);
     const pv = $('tk-preview'); pv.src = URL.createObjectURL(tkBlob); pv.classList.remove('hidden');
     $('tk-send').classList.remove('hidden');
-  };
+  }
   $('tk-send').onclick = () => {
     if (!tkBlob || !tkTask) return;
     $('tk-send').disabled = true; $('tk-bar').classList.remove('hidden'); $('tk-bar-fill').style.width = '0%';
@@ -830,49 +906,60 @@
     if (!v.me.alive) return toast("You're out of the game.");
     openKill();
   };
+  // One video, one tagged person: the imposter picks exactly one player from the dropdown.
+  let killVideoOk = false;
+  function updateKillSend() {
+    const sel = $('kl-victim');
+    killVictim = sel.value ? view.players.find((p) => p.id === sel.value) || null : null;
+    $('kl-send').disabled = !(killFile && killVideoOk && killVictim);
+    $('kl-send').textContent = killVictim ? `Post kill of ${killVictim.name}` : 'Post kill';
+  }
   function openKill() {
-    killVictim = null; killFile = null;
-    $('kl-step1').classList.remove('hidden'); $('kl-step2').classList.add('hidden');
-    const grid = $('kl-victims'); grid.innerHTML = '';
+    resetKillStep2();
+    const sel = $('kl-victim'); sel.innerHTML = '';
+    const ph = document.createElement('option'); ph.value = ''; ph.textContent = 'Tag one person…'; sel.appendChild(ph);
     const partners = new Set(view.me.partners);
-    const targets = view.players.filter((p) => p.alive && p.id !== view.me.id && !partners.has(p.name));
+    const targets = view.players.filter((p) => p.alive && p.id !== view.me.id && !partners.has(p.name))
+      .sort((a, b) => a.name.localeCompare(b.name));
     for (const p of targets) {
-      const b = el('button', 'vote-btn', p.name);
-      b.onclick = () => { killVictim = p; $('kl-vname').textContent = p.name; resetKillStep2(); $('kl-step1').classList.add('hidden'); $('kl-step2').classList.remove('hidden'); };
-      grid.appendChild(b);
+      const o = document.createElement('option'); o.value = p.id; o.textContent = p.name; sel.appendChild(o);
     }
+    updateKillSend();
     $('ov-kill').classList.remove('hidden');
   }
   function resetKillStep2() {
-    killFile = null; $('kl-file').value = '';
+    killFile = null; killVideoOk = false; killVictim = null; $('kl-file').value = '';
     const pv = $('kl-preview'); pv.classList.add('hidden'); pv.removeAttribute('src');
-    $('kl-info').textContent = ''; $('kl-send').classList.add('hidden'); $('kl-bar').classList.add('hidden'); $('kl-send').disabled = false;
+    $('kl-info').textContent = ''; $('kl-bar').classList.add('hidden');
+    $('kl-send').disabled = true; $('kl-send').textContent = 'Post kill';
   }
+  $('kl-victim').onchange = updateKillSend;
   $('kl-close').onclick = () => { $('ov-kill').classList.add('hidden'); resetKillStep2(); };
-  $('kl-backstep').onclick = () => { resetKillStep2(); $('kl-step2').classList.add('hidden'); $('kl-step1').classList.remove('hidden'); };
-  $('kl-file').onchange = (e) => {
-    const f = e.target.files && e.target.files[0]; if (!f) return;
+  $('kl-sample').onclick = async () => handleKillFile(await useSample('/demo/kill.mp4', 'sample.mp4', 'video/mp4'));
+  $('kl-file').onchange = (e) => handleKillFile(e.target.files && e.target.files[0]);
+  function handleKillFile(f) {
+    if (!f) return;
     killFile = f;
     const pv = $('kl-preview'); pv.src = URL.createObjectURL(f); pv.classList.remove('hidden'); pv.play().catch(() => {});
     const mb = (f.size / 1048576).toFixed(1);
     $('kl-info').textContent = 'Checking video length…';
-    $('kl-send').classList.add('hidden');
+    killVideoOk = false; updateKillSend();
     // Kill videos must be at least 5 seconds (and at most 15, to keep downloads small for everyone).
     pv.onloadedmetadata = () => {
       const d = pv.duration;
       if (isFinite(d) && d < 4.9) {
-        $('kl-info').textContent = `That's only ${d.toFixed(1)} seconds. Kill videos have to be at least 5 seconds — tap Record video to try again.`;
-        killFile = null;
+        $('kl-info').textContent = `That's only ${d.toFixed(1)} seconds. Kill videos have to be at least 5 seconds — choose a different video.`;
+        killFile = null; updateKillSend();
       } else if (isFinite(d) && d > 15) {
-        $('kl-info').textContent = `That's ${Math.round(d)} seconds — keep it between 5 and 15. Tap Record video to try again.`;
-        killFile = null;
+        $('kl-info').textContent = `That's ${Math.round(d)} seconds — keep it between 5 and 15. Choose a different video.`;
+        killFile = null; updateKillSend();
       } else {
-        $('kl-info').textContent = isFinite(d) ? `${d.toFixed(1)} s · ${mb} MB` : `${mb} MB`;
-        $('kl-send').classList.remove('hidden');
+        $('kl-info').textContent = isFinite(d) ? `✓ ${d.toFixed(1)} s · ${mb} MB` : `${mb} MB`;
+        killVideoOk = true; updateKillSend();
       }
     };
-    pv.onerror = () => { $('kl-info').textContent = `${mb} MB`; $('kl-send').classList.remove('hidden'); };
-  };
+    pv.onerror = () => { $('kl-info').textContent = `${mb} MB`; killVideoOk = true; updateKillSend(); };
+  }
   // Re-record the clip at 360p on the phone (about 0.4 MB instead of ~10 MB) so 100 phones can download it.
   function shrinkVideo(file, onProgress) {
     const mime = window.MediaRecorder && HTMLCanvasElement.prototype.captureStream &&
@@ -910,10 +997,11 @@
   }
 
   $('kl-send').onclick = async () => {
-    if (!killFile || !killVictim) return;
+    if (!killFile || !killVictim || !killVideoOk) return toast('Choose a 5+ second video and tag who is in it.');
     $('kl-send').disabled = true; $('kl-bar').classList.remove('hidden'); $('kl-bar-fill').style.width = '0%';
     $('kl-info').textContent = 'Shrinking video…';
-    const upload = await shrinkVideo(killFile, (f) => { $('kl-bar-fill').style.width = Math.round(f * 50) + '%'; });
+    // small clips are already cheap to send; only shrink big camera-roll videos
+    const upload = killFile.size < 2.5e6 ? killFile : await shrinkVideo(killFile, (f) => { $('kl-bar-fill').style.width = Math.round(f * 50) + '%'; });
     $('kl-info').textContent = `Uploading ${(upload.size / 1048576).toFixed(1)} MB…`;
     const xhr = new XMLHttpRequest();
     xhr.open('POST', `/api/kill?code=${encodeURIComponent(currentCode)}&victim=${encodeURIComponent(killVictim.id)}`);
@@ -939,7 +1027,8 @@
   document.addEventListener('pointerdown', keepAwake, { passive: true });
 
   // ---------- boot ----------
-  if (!socket.connected) show(host ? (host.name ? 'hosthome' : 'hostlogin') : player ? 'game' : 'join');
+  if (demoMatch) show(demoPicker ? 'demo' : 'game');
+  else if (!socket.connected) show(host ? (host.name ? 'hosthome' : 'hostlogin') : player ? 'game' : 'join');
   if (host) $('hh-name').textContent = host.name;
   if (player && !host) currentCode = player.code;
 })();
