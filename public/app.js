@@ -382,7 +382,7 @@
     else { const box = $('g-messages'); box.scrollTop = box.scrollHeight; }
   });
 
-  const imposterCount = (v) => (v.players.length <= 5 ? 1 : 2);
+  const imposterCount = (v) => v.imposterCount || (v.players.length <= 9 ? 1 : 2);
   function roleText(v) {
     const me = v.me; const n = imposterCount(v);
     if (!me || !me.role) return null;

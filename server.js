@@ -178,7 +178,7 @@ function startGame(g, opts = {}) {
   if (pool.length === 0) throw new Error('The task list is empty. Add tasks first.');
   const everyone = pool.filter((t) => !t.shared);
   g.sharedTasks = pool.filter((t) => t.shared).map((t) => ({ id: 's' + id(3), text: t.text, shared: true, done: false, pending: null, pendingBy: null, doneBy: null }));
-  const nImp = ps.length <= 5 ? 1 : 2;
+  const nImp = ps.length <= 9 ? 1 : 2; // 9 or fewer players: 1 imposter; 10 or more: 2
   const order = shuffle(ps.map((p) => p.id));
   const imps = new Set(opts.imposters || order.slice(0, nImp));
   for (const p of ps) {
@@ -251,6 +251,7 @@ function viewFor(g, who, full) {
   }));
   const v = {
     code: g.code, status: g.status, round: g.round || 0, players,
+    imposterCount: Object.values(g.players).filter((p) => p.role === 'imposter').length,
     msgEpoch: g.msgEpoch || 0, progress: crewProgress(g), sharedTasks: g.sharedTasks || [],
     settings: g.settings, winner: g.winner, winReason: g.winReason,
     lastResult: g.lastResult,
@@ -539,8 +540,8 @@ function createDemo(kind) {
   let you = null;
   if (kind !== 'host') you = add('You', false);
   const bots = BOT_NAMES.slice(0, kind === 'host' ? 6 : 4).map((n) => add(n, true));
-  // imposter demo: you are the only imposter. crew demo: one bot imposter. host demo: two bot imposters.
-  const imposters = kind === 'imposter' ? [you.id] : kind === 'crew' ? [pick(bots).id] : shuffle(bots).slice(0, 2).map((b) => b.id);
+  // imposter demo: you are the imposter. crew + host demos: one bot imposter (under 10 players means 1 imposter).
+  const imposters = kind === 'imposter' ? [you.id] : [pick(bots).id];
   startGame(g, { imposters, pool: DEMO_TASKS });
   return { g, you };
 }
