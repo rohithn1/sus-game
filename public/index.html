@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1">
+<meta name="theme-color" content="#0b0f1a">
+<title>SUS</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<!-- ============ JOIN ============ -->
+<section id="scr-join" class="screen center">
+  <div class="brand">
+    <div class="logo">SUS</div>
+    <div class="tag">real-life imposter game</div>
+  </div>
+  <form id="join-form" class="card stack">
+    <label>Game code
+      <input id="join-code" autocomplete="off" autocapitalize="characters" maxlength="4" placeholder="ABCD" inputmode="latin" required>
+    </label>
+    <label>Your name
+      <input id="join-name" autocomplete="nickname" maxlength="16" placeholder="Name" required>
+    </label>
+    <button class="btn primary big" type="submit">Join game</button>
+    <p class="hint">Turn your volume up and keep this page open during the game — that's how you'll hear meeting alerts.</p>
+  </form>
+</section>
+
+<!-- ============ HOST LOGIN ============ -->
+<section id="scr-hostlogin" class="screen center hidden">
+  <div class="brand"><div class="logo small">SUS</div><div class="tag">host link</div></div>
+  <form id="host-form" class="card stack">
+    <p class="hint">This phone will be a host for every game.</p>
+    <label>Your name <input id="host-name" maxlength="20" placeholder="e.g. Rohith" required></label>
+    <button class="btn primary big" type="submit">Continue as host</button>
+  </form>
+</section>
+
+<!-- ============ HOST HOME ============ -->
+<section id="scr-hosthome" class="screen hidden">
+  <header class="bar">
+    <div class="logo tiny">SUS</div>
+    <div class="grow"></div>
+    <span class="pill host">HOST · <span id="hh-name"></span></span>
+  </header>
+  <div class="scroll pad stack">
+    <button class="btn primary big" id="hh-create">+ New game lobby</button>
+    <h3>Lobbies</h3>
+    <div id="hh-games" class="stack"></div>
+    <h3>Task list</h3>
+    <p class="hint">One task per line. Each player gets a random handful when a game starts.</p>
+    <textarea id="hh-tasks" rows="10"></textarea>
+    <button class="btn" id="hh-save-tasks">Save task list</button>
+    <h3>Host link</h3>
+    <p class="hint">Send this to your co-host. Anyone with it can run games, so don't share it with players.</p>
+    <button class="btn" id="hh-copy-link">Copy host link</button>
+    <div class="spacer"></div>
+    <button class="link danger" id="hh-logout">Log out of host mode</button>
+  </div>
+</section>
+
+<!-- ============ GAME (players + hosts) ============ -->
+<section id="scr-game" class="screen hidden">
+  <header class="bar">
+    <button class="icon-btn" id="g-back" aria-label="Back">←</button>
+    <div class="code-chip">Code <b id="g-code"></b></div>
+    <span class="pill" id="g-status"></span>
+    <div class="grow"></div>
+    <button class="btn small ghost" id="g-peek">Hold: my role</button>
+  </header>
+  <div class="progress-wrap" id="g-progress-wrap">
+    <div class="progress"><div class="progress-fill" id="g-progress"></div></div>
+    <span id="g-progress-label"></span>
+  </div>
+  <nav class="tabs" id="g-tabs">
+    <button data-tab="chat" class="active">Chat</button>
+    <button data-tab="tasks" id="tab-tasks-btn">Tasks</button>
+    <button data-tab="players" id="tab-players-btn">Players</button>
+    <button data-tab="control" id="tab-control-btn">Host</button>
+  </nav>
+
+  <div class="tabpane" id="pane-chat">
+    <div class="banner hidden" id="g-banner"></div>
+    <div class="messages" id="g-messages"></div>
+    <form class="chatbar" id="chat-form">
+      <button type="button" class="icon-btn video" id="g-video" aria-label="Post video">📹</button>
+      <input id="chat-input" maxlength="400" placeholder="Message" autocomplete="off">
+      <button class="btn primary" type="submit">Send</button>
+    </form>
+    <div class="chat-locked hidden" id="chat-locked"></div>
+  </div>
+
+  <div class="tabpane hidden" id="pane-tasks">
+    <div class="scroll pad stack">
+      <p class="hint">Do each task in real life, take a photo, and show it to a host. They'll mark it done.</p>
+      <ul id="g-tasks" class="tasklist"></ul>
+    </div>
+  </div>
+
+  <div class="tabpane hidden" id="pane-players">
+    <div class="scroll pad stack">
+      <label class="toggle hidden" id="roles-toggle-wrap"><input type="checkbox" id="roles-toggle"> Show roles (hosts only)</label>
+      <div id="g-players" class="stack"></div>
+    </div>
+  </div>
+
+  <div class="tabpane hidden" id="pane-control">
+    <div class="scroll pad stack">
+      <div class="qr-box" id="c-qr-box">
+        <img id="c-qr" alt="Join QR code">
+        <div class="qr-code-text">Code <b id="c-code"></b></div>
+        <div class="hint" id="c-url"></div>
+      </div>
+      <div class="row">
+        <label class="grow">Tasks per player
+          <input id="c-tpp" type="number" min="1" max="20">
+        </label>
+      </div>
+      <button class="btn primary big" id="c-start">Start game</button>
+      <button class="btn warn" id="c-endvote">End vote now</button>
+      <button class="btn" id="c-lobby">Back to lobby (new players can join)</button>
+      <button class="btn warn" id="c-endgame">End game</button>
+      <button class="link danger" id="c-delete">Delete this lobby</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============ OVERLAYS ============ -->
+<div id="ov-reveal" class="overlay hidden">
+  <div id="rv-count" class="reveal-count">
+    <div class="rv-label">Hide your screen!</div>
+    <div class="rv-num" id="rv-num">5</div>
+  </div>
+  <div id="rv-role" class="reveal-role hidden">
+    <div class="rv-small">You are</div>
+    <div class="rv-big" id="rv-big"></div>
+    <div class="rv-sub" id="rv-sub"></div>
+  </div>
+</div>
+
+<div id="ov-peek" class="overlay peek hidden">
+  <div class="rv-small">You are</div>
+  <div class="rv-big" id="pk-big"></div>
+  <div class="rv-sub" id="pk-sub"></div>
+</div>
+
+<div id="ov-meeting" class="overlay meeting hidden">
+  <div class="meet-inner">
+    <div class="meet-title">EMERGENCY<br>MEETING</div>
+    <div class="meet-sub" id="mt-sub"></div>
+    <div class="meet-video" id="mt-video"></div>
+    <div class="meet-status" id="mt-status"></div>
+    <div class="vote-grid" id="mt-votes"></div>
+    <button class="btn warn hidden" id="mt-endvote">End vote now (host)</button>
+    <button class="link" id="mt-hide">Look at chat (vote is still open)</button>
+  </div>
+</div>
+
+<div id="ov-result" class="overlay result hidden">
+  <div class="res-inner">
+    <div class="res-emoji" id="rs-emoji"></div>
+    <div class="res-title" id="rs-title"></div>
+    <div class="res-sub" id="rs-sub"></div>
+    <div class="res-tally" id="rs-tally"></div>
+    <button class="btn primary big" id="rs-ok">OK</button>
+  </div>
+</div>
+
+<div id="ov-kill" class="overlay sheet hidden">
+  <div class="sheet-inner">
+    <div class="sheet-head">
+      <h2>Post a kill</h2>
+      <button class="icon-btn" id="kl-close" aria-label="Close">✕</button>
+    </div>
+    <div id="kl-step1">
+      <p class="hint">Who did you get?</p>
+      <div id="kl-victims" class="vote-grid"></div>
+    </div>
+    <div id="kl-step2" class="hidden stack">
+      <p>Record a ~5 second video of <b id="kl-vname"></b>.</p>
+      <label class="btn primary big file-btn">🎥 Record video
+        <input type="file" id="kl-file" accept="video/*" capture="environment">
+      </label>
+      <video id="kl-preview" class="hidden" playsinline muted loop></video>
+      <div class="hint" id="kl-info"></div>
+      <button class="btn danger big hidden" id="kl-send">Post kill</button>
+      <div class="upload-bar hidden" id="kl-bar"><div id="kl-bar-fill"></div></div>
+      <button class="link" id="kl-backstep">← Pick someone else</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

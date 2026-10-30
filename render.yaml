@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: sus-game
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/info
+    envVars:
+      - key: HOST_KEY
+        generateValue: true
+      - key: NODE_VERSION
+        value: "22"
