@@ -284,3 +284,18 @@ body.demo .demo-only { display: block; }
 .tasklist li.done .done-by { text-decoration: none; }
 .imp-flag { background: var(--red); color: #fff; font-size: 10px; font-weight: 900; text-transform: uppercase; padding: 2px 6px; border-radius: 6px; }
 .shared-card { border-color: rgba(46,230,214,.4); }
+
+/* ---------- rules on the home page ---------- */
+#scr-join { justify-content: flex-start; }
+#scr-join > :first-child { margin-top: auto; }
+#scr-join > :last-child { margin-bottom: auto; }
+.rules { padding: 0; }
+.rules summary { list-style: none; cursor: pointer; padding: 16px 20px; font-weight: 800; font-size: 16px; display: flex; align-items: center; justify-content: space-between; }
+.rules summary::-webkit-details-marker { display: none; }
+.rules summary::after { content: '▾'; color: var(--muted); transition: transform .2s; }
+.rules[open] summary::after { transform: rotate(180deg); }
+.rules-body { padding: 0 20px 18px; border-top: 1px solid var(--line); }
+.rules-body h4 { margin: 16px 0 6px; font-size: 15px; }
+.rules-body ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
+.rules-body li { color: var(--text); font-size: 14px; line-height: 1.45; }
+.rules-body li::marker { color: var(--muted); }
