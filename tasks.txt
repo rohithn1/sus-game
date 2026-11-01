@@ -1,13 +1,14 @@
 # One task per line. Lines starting with # are ignored.
 # Start a line with [shared] for a task that only one person needs to do. Other tasks must be done by everyone.
-[shared] Placeholder: Stack 5 cups into a pyramid in the kitchen
-[shared] Placeholder: Fold a towel and leave it on the couch
-[shared] Placeholder: Find the remote and put it on the TV stand
-[shared] Placeholder: Draw a smiley face on the whiteboard
-[shared] Placeholder: Turn on the porch light
-[shared] Placeholder: Line up 3 shoes by the front door
-[shared] Placeholder: Arrange the couch pillows by color
-[shared] Placeholder: Open the blinds in the living room
-Placeholder: Write your name on a sticky note on the fridge
-Placeholder: Make a paper airplane
-Placeholder: Do 10 jumping jacks (filmed or witnessed)
+[shared] Make a drink for everyone in your game
+[shared] Find/fold/store throw blanket
+[shared] Check that there is no laundry in the drier
+[shared] Take a picture with my or Zahid's license plate
+[shared] Create your contribution to our wall mural
+[shared] Organize a pair of shoes at the front of the door
+[shared] Get a plate of food/snacks in the kitchen
+[shared] Compliment the hosts on a piece of decor you like and explain your reasoning
+[shared] Take a bear selfie
+[shared] Ask the hosts for a house tour
+[shared] Tell judges fun fact about someone new you learned at party
+[shared] Add an ornament to our tree
