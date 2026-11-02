@@ -36,7 +36,8 @@ Open the host link on your phone and type your name. That phone is now a host. S
 3. In the game, press **Start game** (3+ players). Everyone gets a 5-second countdown to hide their screen, then sees their role for 3 seconds.
 4. Each player's tasks sit as a **checklist at the top of the chat**. When they finish one, they tap **📸 Submit**, take a photo, and send it. It posts in the chat tagged **@hosts**, and every host's phone gets pinged, even if they're in a different game.
 5. Hosts tap **✓ Approve** or **✕ Reject** right on the photo. Hosts never learn who the imposters are (no roles, no killer names; just approvals) and never get the death alarm or vote screen; they just see a small "players are voting" note and keep approving. Approved tasks tick off the player's checklist. Rejected ones can be resubmitted.
-6. During a vote, **End vote now** counts the votes so far, in case someone's phone died.
+6. Don't want to approve anything? Untick **Host approvals** on a lobby's Host tab. Task photos are then approved instantly and kills post (and sound the alarm) as soon as they upload. You can switch it back on anytime.
+7. During a vote, **End vote now** counts the votes so far, in case someone's phone died.
 
 ## How a game ends
 - **Crew wins** when every imposter is out, or when every crew task is approved before the imposters reach 50/50.

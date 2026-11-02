@@ -402,9 +402,9 @@ app.post('/api/kill', express.raw({ type: () => true, limit: '60mb' }), async (r
     };
     g.pendingKills.push(kill);
     if (g.pendingKills.length > 30) g.pendingKills.splice(0, g.pendingKills.length - 30);
-    io.to(hostRoom(g)).emit('host:tag', { kind: 'kill', code, victimName: victim.name });
+    if (!autoApprove(g)) io.to(hostRoom(g)).emit('host:tag', { kind: 'kill', code, victimName: victim.name });
     broadcast(g, 'hosts'); save();
-    res.json({ ok: true });
+    res.json({ ok: true, auto: autoApprove(g) });
 
     // Phones already shrink videos to small mp4s; only convert big or webm files (webm doesn't play on iPhones).
     let file = `${base}.${ext}`;
@@ -414,7 +414,8 @@ app.post('/api/kill', express.raw({ type: () => true, limit: '60mb' }), async (r
     }
     kill.video = `/uploads/${file}`;
     if (kill.status === 'processing') kill.status = 'pending';
-    if (g.demo) demoKillReady(g, kill);
+    if (autoApprove(g)) approveKillWhenReady(g, kill, 0);
+    else if (g.demo) demoKillReady(g, kill);
     broadcast(g, 'hosts'); save();
   } catch (e) {
     console.error(e);
@@ -446,15 +447,34 @@ app.post('/api/task-photo', express.raw({ type: () => true, limit: '20mb' }), (r
     t.pending = msg.id;
     if (t.shared) t.pendingBy = p.id;
     pushMsg(g, msg);
-    io.to(hostRoom(g)).emit('host:tag', { code, msgId: msg.id, name: p.name, taskText: t.text });
-    if (g.demo) demoTaskSubmitted(g, msg);
+    if (autoApprove(g)) reviewTask(g, msg, true, AUTO);
+    else {
+      io.to(hostRoom(g)).emit('host:tag', { code, msgId: msg.id, name: p.name, taskText: t.text });
+      if (g.demo) demoTaskSubmitted(g, msg);
+    }
     broadcast(g); save();
-    res.json({ ok: true });
+    res.json({ ok: true, auto: autoApprove(g) });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Upload failed.' });
   }
 });
+
+// Per-lobby switch: with host approvals off, task photos and kill videos go through on their own.
+const AUTO = 'auto';
+const autoApprove = (g) => !!(g.settings && g.settings.autoApprove);
+function approveKillWhenReady(g, k, wait) {
+  setTimeout(() => {
+    if (state.games[g.code] !== g || k.status !== 'pending') return;
+    if (g.status === 'meeting') return approveKillWhenReady(g, k, 3000); // wait for the current vote to finish
+    if (g.status !== 'playing') return;
+    try { reviewKill(g, k, true, AUTO); } catch {}
+  }, wait);
+}
+function approveEverythingPending(g) {
+  for (const m of g.messages) if (m.type === 'task' && m.status === 'pending') { try { reviewTask(g, m, true, AUTO); } catch {} }
+  for (const k of g.pendingKills || []) if (k.status === 'pending') approveKillWhenReady(g, k, 0);
+}
 
 function reviewTask(g, m, approve, reviewer) {
   if (!['playing', 'meeting', 'reveal'].includes(g.status)) throw new Error('The game is not running.');
@@ -813,7 +833,7 @@ io.on('connection', (socket) => {
     const code = newCode();
     state.games[code] = {
       code, createdAt: now(), status: 'lobby', players: {}, messages: [], meeting: null, lastResult: null,
-      settings: { tasksPerPlayer: Number(config.defaultTasksPerPlayer) || 4 }, round: 0, winner: null, winReason: '',
+      settings: { autoApprove: false }, round: 0, winner: null, winReason: '',
     };
     sysMsg(state.games[code], `Lobby ${code} created. Scan the QR code or enter the code to join.`);
     io.to('hosts').emit('games', gamesSummary());
@@ -913,9 +933,13 @@ io.on('connection', (socket) => {
     save();
   });
 
-  on(socket, 'host:settings', ({ code, tasksPerPlayer }) => {
+  on(socket, 'host:settings', ({ code, autoApprove: auto }) => {
     const g = hostGame(socket, code);
-    g.settings.tasksPerPlayer = Math.max(1, Math.min(20, Number(tasksPerPlayer) || 4));
+    if (typeof auto === 'boolean' && auto !== autoApprove(g)) {
+      g.settings.autoApprove = auto;
+      sysMsg(g, auto ? '⚡ Host approvals are off — task photos and kills now go through automatically.' : '🧑‍⚖️ Host approvals are back on — hosts will check task photos and kills.');
+      if (auto && ['playing', 'meeting', 'reveal'].includes(g.status)) approveEverythingPending(g);
+    }
     broadcast(g); save();
   });
 

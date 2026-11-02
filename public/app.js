@@ -515,7 +515,7 @@
       d.appendChild(img);
     }
     const txt = m.status === 'pending' ? '⏳ Waiting for a host'
-      : m.status === 'approved' ? `✅ Approved by ${m.reviewer || 'a host'}`
+      : m.status === 'approved' ? (m.reviewer === 'auto' ? '✅ Approved' : `✅ Approved by ${m.reviewer || 'a host'}`)
       : `❌ Not accepted by ${m.reviewer || 'a host'} — try again`;
     d.appendChild(el('div', 'task-status ' + m.status, txt));
     if (m.status === 'pending' && canReview(v)) {
@@ -726,6 +726,11 @@
     if (qr.getAttribute('src') !== src) qr.setAttribute('src', src);
     $('c-code').textContent = v.code;
     $('c-url').textContent = v.joinUrl;
+    const auto = !!(v.settings && v.settings.autoApprove);
+    $('c-approvals').checked = !auto;
+    $('c-approvals-hint').textContent = auto
+      ? 'OFF — task photos are approved instantly and kills post (and sound the alarm) as soon as they upload. You won\'t get pinged.'
+      : 'ON — you approve every task photo and kill video before it counts.';
     const nShared = taskPool.filter((t) => t.shared).length, nEvery = taskPool.length - nShared;
     $('c-tasks-info').textContent = `Task list: ${nShared} shared, ${nEvery} for everyone. Edit it under All games → Host settings. Changes apply to the next game started.`;
     $('c-tasks-info').classList.toggle('hidden', !!(host && host.demo));
@@ -740,6 +745,12 @@
     const r = await call('host:start', { code: currentCode });
     if (!r.ok) return toast(r.error);
     setTab('players');
+  };
+  $('c-approvals').onchange = async (e) => {
+    const on = e.target.checked;
+    if (!on && !confirm('Turn off host approvals? Task photos and kills will go through automatically, including anything waiting right now.')) { e.target.checked = true; return; }
+    const r = await call('host:settings', { code: currentCode, autoApprove: !on });
+    if (!r.ok) { toast(r.error); e.target.checked = !on; }
   };
   const endVote = async () => { if (!confirm('End the vote now and count the votes so far?')) return; const r = await call('host:endVote', { code: currentCode }); if (!r.ok) toast(r.error); };
   $('c-endvote').onclick = endVote;
@@ -965,7 +976,7 @@
     xhr.upload.onprogress = (e) => { if (e.lengthComputable) $('tk-bar-fill').style.width = Math.round((e.loaded / e.total) * 100) + '%'; };
     xhr.onload = () => {
       let r = {}; try { r = JSON.parse(xhr.responseText); } catch {}
-      if (xhr.status === 200) { $('ov-task').classList.add('hidden'); resetTk(); toast('Sent! The hosts have been tagged.'); }
+      if (xhr.status === 200) { $('ov-task').classList.add('hidden'); resetTk(); toast(r.auto ? '✅ Done — task checked off.' : 'Sent! The hosts have been tagged.'); }
       else { toast(r.error || 'Upload failed.'); $('tk-send').disabled = false; }
     };
     xhr.onerror = () => { toast('Upload failed — check your connection.'); $('tk-send').disabled = false; };
@@ -992,6 +1003,7 @@
   }
   function openKill() {
     resetKillStep2();
+    $('kl-approval-note').textContent = view.settings && view.settings.autoApprove ? 'It posts as soon as it uploads.' : 'A host checks it before anyone else sees it.';
     const sel = $('kl-victim'); sel.innerHTML = '';
     const ph = document.createElement('option'); ph.value = ''; ph.textContent = 'Tag one person…'; sel.appendChild(ph);
     const partners = new Set(view.me.partners);
@@ -1086,7 +1098,7 @@
     xhr.upload.onprogress = (e) => { if (e.lengthComputable) $('kl-bar-fill').style.width = (50 + Math.round((e.loaded / e.total) * 50)) + '%'; };
     xhr.onload = () => {
       let r = {}; try { r = JSON.parse(xhr.responseText); } catch {}
-      if (xhr.status === 200) { $('ov-kill').classList.add('hidden'); resetKillStep2(); toast('Sent to the hosts. Once a host approves it, everyone gets the alert. Act natural. 🤫', 4500); }
+      if (xhr.status === 200) { $('ov-kill').classList.add('hidden'); resetKillStep2(); toast(r.auto ? 'Posted! Everyone gets the alert in a moment. Act natural. 🤫' : 'Sent to the hosts. Once a host approves it, everyone gets the alert. Act natural. 🤫', 4500); }
       else { toast(r.error || 'Upload failed.'); $('kl-send').disabled = false; }
     };
     xhr.onerror = () => { toast('Upload failed — check the Wi-Fi.'); $('kl-send').disabled = false; };

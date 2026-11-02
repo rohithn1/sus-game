@@ -299,3 +299,5 @@ body.demo .demo-only { display: block; }
 .rules-body ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
 .rules-body li { color: var(--text); font-size: 14px; line-height: 1.45; }
 .rules-body li::marker { color: var(--muted); }
+.approve-box { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
+.approve-box .toggle input { width: 22px; height: 22px; accent-color: var(--cyan); }

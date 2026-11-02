@@ -53,7 +53,7 @@
       <ul>
         <li>To kill someone, secretly film them for <b>at least 5 seconds</b> with your camera. One person per video.</li>
         <li>Tap <b>＋ → Post a kill</b>, upload the video, and tag who's in it.</li>
-        <li>A host checks it. Once approved, it posts from <b>"Anonymous imposter"</b> and everyone's phone sounds the alarm.</li>
+        <li>A host checks it. Once approved, it posts from <b>"Anonymous imposter"</b> and everyone's phone sounds the alarm. (If the hosts turn approvals off, it posts right away.)</li>
         <li>Imposters get a fake task list — pretend to do tasks so you blend in.</li>
       </ul>
 
@@ -181,6 +181,10 @@
         <div class="qr-code-text">Code <b id="c-code"></b></div>
         <div class="hint" id="c-url"></div>
       </div>
+      <div class="approve-box">
+        <label class="toggle"><input type="checkbox" id="c-approvals"> <span><b>Host approvals</b></span></label>
+        <p class="hint" id="c-approvals-hint"></p>
+      </div>
       <p class="hint" id="c-tasks-info"></p>
       <button class="btn primary big" id="c-start">Start game</button>
       <button class="btn warn" id="c-endvote">End vote now</button>
@@ -239,7 +243,7 @@
       <button class="icon-btn" id="kl-close" aria-label="Close">✕</button>
     </div>
     <div class="stack">
-      <p class="hint">Film the kill with your normal camera app, then upload it here — <b>at least 5 seconds</b>, one person per video. A host checks it before anyone else sees it.</p>
+      <p class="hint">Film the kill with your normal camera app, then upload it here — <b>at least 5 seconds</b>, one person per video. <span id="kl-approval-note">A host checks it before anyone else sees it.</span></p>
       <label class="btn primary big file-btn">🎞️ Choose video from camera roll
         <input type="file" id="kl-file" accept="video/*">
       </label>
