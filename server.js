@@ -653,7 +653,8 @@ function botTick(g) {
       if (t < d.voteDelay[b.id]) continue;
       // bots never vote you out in the player demos, so you can keep testing
       const choices = ps.filter((p) => isAlive(p) && p.id !== b.id && (d.kind === 'host' || p.bot));
-      if (!choices.length || crypto.randomInt(0, 4) === 0) { m.votes[b.id] = SKIP; continue; }
+      if (!choices.length) continue;
+      if (!m.victimId && crypto.randomInt(0, 4) === 0) { m.votes[b.id] = SKIP; continue; } // skipping only after a called meeting
       m.votes[b.id] = pick(choices).id;
     }
     if (d.meetingTalk < 2 && bots.length && t - m.startedAt > 2500 * (d.meetingTalk + 1)) {
@@ -834,6 +835,7 @@ io.on('connection', (socket) => {
     if (!p || !isAlive(p)) throw new Error("You're out, so you can't vote.");
     if (g.meeting.votes[p.id]) throw new Error('You already voted.');
     if (targetId === SKIP) {
+      if (g.meeting.victimId) throw new Error("Someone died — you can't skip this vote. Pick who to boot.");
       g.meeting.votes[p.id] = SKIP;
     } else {
       const t = g.players[targetId];

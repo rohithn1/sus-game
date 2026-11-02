@@ -855,7 +855,9 @@
     }
     ov.classList.toggle('hidden', meetingHidden);
     $('mt-sub').textContent = m.victimId ? `💀 ${m.victimName || 'Someone'} was killed!` : `📢 ${m.calledBy || 'Someone'} called a meeting!`;
-    $('mt-status').textContent = `${m.votedIds.length} of ${m.voterCount} votes in. Most votes gets booted — a tie or "skip" means nobody goes.`;
+    $('mt-status').textContent = m.victimId
+      ? `${m.votedIds.length} of ${m.voterCount} votes in. Someone died, so you can't skip — most votes gets booted, a tie means nobody goes.`
+      : `${m.votedIds.length} of ${m.voterCount} votes in. Most votes gets booted — a tie or "skip" means nobody goes.`;
     $('mt-endvote').classList.toggle('hidden', !v.isHost);
 
     const grid = $('mt-votes'); grid.innerHTML = '';
@@ -874,7 +876,7 @@
       };
       grid.appendChild(b);
     }
-    if (!v.isHost && me && me.alive) {
+    if (!v.isHost && me && me.alive && !m.victimId) { // no skipping after a kill
       const sk = el('button', 'vote-btn skip-btn' + (m.myVote === 'skip' ? ' picked' : ''), '⏭️ Skip vote');
       sk.disabled = !canVote;
       sk.onclick = async () => {
