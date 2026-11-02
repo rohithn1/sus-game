@@ -301,3 +301,15 @@ body.demo .demo-only { display: block; }
 .rules-body li::marker { color: var(--muted); }
 .approve-box { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
 .approve-box .toggle input { width: 22px; height: 22px; accent-color: var(--cyan); }
+
+/* ---------- meetings + task kinds ---------- */
+.meeting-btn { background: var(--red); border-color: var(--red); }
+.skip-btn { grid-column: 1 / -1; background: rgba(0,0,0,.25); border-style: dashed; border-color: rgba(255,255,255,.35); color: var(--text); }
+.skip-btn.picked { color: var(--text); }
+.cl-section { display: block !important; }
+.cl-section-title { font-size: 12px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; color: var(--text); }
+.cl-section-sub { font-size: 12px; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--muted); margin-top: 3px; line-height: 1.4; }
+.task-kind { flex: none; font-size: 10px; font-weight: 900; letter-spacing: .06em; padding: 3px 6px; border-radius: 6px; }
+.task-kind.group { background: rgba(46,230,214,.15); color: var(--cyan); }
+.task-kind.solo { background: rgba(255,210,63,.15); color: var(--yellow); }
+.seg-btn { font-size: 12px; }

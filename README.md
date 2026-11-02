@@ -36,8 +36,9 @@ Open the host link on your phone and type your name. That phone is now a host. S
 3. In the game, press **Start game** (3+ players). Everyone gets a 5-second countdown to hide their screen, then sees their role for 3 seconds.
 4. Each player's tasks sit as a **checklist at the top of the chat**. When they finish one, they tap **📸 Submit**, take a photo, and send it. It posts in the chat tagged **@hosts**, and every host's phone gets pinged, even if they're in a different game.
 5. Hosts tap **✓ Approve** or **✕ Reject** right on the photo. Hosts never learn who the imposters are (no roles, no killer names; just approvals) and never get the death alarm or vote screen; they just see a small "players are voting" note and keep approving. Approved tasks tick off the player's checklist. Rejected ones can be resubmitted.
-6. Don't want to approve anything? Untick **Host approvals** on a lobby's Host tab. Task photos are then approved instantly and kills post (and sound the alarm) as soon as they upload. You can switch it back on anytime.
-7. During a vote, **End vote now** counts the votes so far, in case someone's phone died.
+6. Anyone still in the game can tap the red 🚨 button next to the chat box to call an emergency meeting at any time (hosts can too, from the Host tab). In any vote, players can tap ⏭️ Skip vote. A tie, or skip winning, means nobody goes.
+7. Don't want to approve anything? Untick **Host approvals** on a lobby's Host tab. Task photos are then approved instantly and kills post (and sound the alarm) as soon as they upload. You can switch it back on anytime.
+8. During a vote, **End vote now** counts the votes so far, in case someone's phone died.
 
 ## How a game ends
 - **Crew wins** when every imposter is out, or when every crew task is approved before the imposters reach 50/50.
@@ -45,8 +46,8 @@ Open the host link on your phone and type your name. That phone is now a host. S
 
 ## Your task list
 Each task is one of two types:
-- **Shared**: one person does it, and once a host approves the photo it's done for the whole group.
-- **Everyone**: every player has to do it once.
+- **👥 Group**: only one person needs to do it, and once it's approved it's done for the whole group.
+- **🙋 Individual**: every player has to do it themselves.
 
 Every task is used in every game. Edit them on the host screen under **All games → Host settings**: add tasks, flip each one between **Shared** and **Everyone**, then tap **Save**. On the free plan, in-app edits are lost when the server restarts, so for a permanent list edit `tasks.txt` on GitHub (put `[shared]` at the start of a line to make it shared).
 

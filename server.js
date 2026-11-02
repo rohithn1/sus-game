@@ -199,16 +199,30 @@ function startGame(g, opts = {}) {
   }, REVEAL_MS);
 }
 
+const SKIP = 'skip';
+
+// Anyone still in the game (or a host) can call an emergency meeting at any time while the game is running.
+function callMeeting(g, caller) {
+  if (g.status === 'meeting') throw new Error('A meeting is already happening.');
+  if (g.status !== 'playing') throw new Error('You can only call a meeting while the game is running.');
+  g.status = 'meeting';
+  g.meeting = { id: id(4), victimId: null, calledBy: caller, video: null, votes: {}, startedAt: now() };
+  sysMsg(g, `📢 ${caller} called an EMERGENCY MEETING — everyone still alive must vote (or skip).`);
+}
+
 function resolveMeeting(g, forced) {
   const m = g.meeting;
   if (!m) return;
   const tally = {};
   for (const target of Object.values(m.votes)) tally[target] = (tally[target] || 0) + 1;
   const sorted = Object.entries(tally).sort((a, b) => b[1] - a[1]);
-  const result = { id: id(4), meetingId: m.id, tally, forced: !!forced, ejectedId: null, wasImposter: false, tie: false };
+  const result = { id: id(4), meetingId: m.id, tally, forced: !!forced, ejectedId: null, wasImposter: false, tie: false, skipped: false };
   if (sorted.length === 0) {
     result.tie = true;
     sysMsg(g, '🗳️ Nobody voted. No one was voted off.');
+  } else if (sorted[0][0] === SKIP && !(sorted.length > 1 && sorted[1][1] === sorted[0][1])) {
+    result.skipped = true;
+    sysMsg(g, '⏭️ The group voted to skip. No one was voted off.');
   } else if (sorted.length > 1 && sorted[0][1] === sorted[1][1]) {
     result.tie = true;
     sysMsg(g, '🗳️ It was a tie. No one was voted off.');
@@ -265,7 +279,7 @@ function viewFor(g, who, full) {
     const m = g.meeting;
     const voters = Object.values(g.players).filter(isAlive);
     v.meeting = {
-      id: m.id, victimId: m.victimId, victimName: g.players[m.victimId]?.name, video: m.video,
+      id: m.id, victimId: m.victimId, victimName: g.players[m.victimId]?.name, video: m.video, calledBy: m.calledBy || null,
       votedIds: Object.keys(m.votes), voterCount: voters.length,
       myVote: me ? m.votes[me.id] || null : null,
     };
@@ -435,8 +449,8 @@ app.post('/api/task-photo', express.raw({ type: () => true, limit: '20mb' }), (r
     const tid = clean(req.query.task, 20);
     const t = (p.tasks || []).find((x) => x.id === tid) || (g.sharedTasks || []).find((x) => x.id === tid);
     if (!t) return res.status(400).json({ error: 'Pick one of your tasks.' });
-    if (t.done) return res.status(400).json({ error: t.shared ? `${t.doneBy || 'Someone'} already finished that shared task.` : 'That task is already done.' });
-    if (t.pending) return res.status(400).json({ error: t.shared ? 'Someone already sent a photo for that shared task. Waiting for a host.' : 'That task is already waiting for a host.' });
+    if (t.done) return res.status(400).json({ error: t.shared ? `${t.doneBy || 'Someone'} already finished that group task.` : 'That task is already done.' });
+    if (t.pending) return res.status(400).json({ error: t.shared ? 'Someone already sent a photo for that group task. Waiting for a host.' : 'That task is already waiting for a host.' });
     const type = String(req.get('content-type') || '');
     if (!type.startsWith('image/')) return res.status(400).json({ error: 'That file is not a photo.' });
     if (!req.body || !req.body.length) return res.status(400).json({ error: 'No photo received.' });
@@ -639,7 +653,7 @@ function botTick(g) {
       if (t < d.voteDelay[b.id]) continue;
       // bots never vote you out in the player demos, so you can keep testing
       const choices = ps.filter((p) => isAlive(p) && p.id !== b.id && (d.kind === 'host' || p.bot));
-      if (!choices.length) continue;
+      if (!choices.length || crypto.randomInt(0, 4) === 0) { m.votes[b.id] = SKIP; continue; }
       m.votes[b.id] = pick(choices).id;
     }
     if (d.meetingTalk < 2 && bots.length && t - m.startedAt > 2500 * (d.meetingTalk + 1)) {
@@ -819,11 +833,24 @@ io.on('connection', (socket) => {
     if (!g.meeting) throw new Error('No vote is happening.');
     if (!p || !isAlive(p)) throw new Error("You're out, so you can't vote.");
     if (g.meeting.votes[p.id]) throw new Error('You already voted.');
-    const t = g.players[targetId];
-    if (!t || !isAlive(t)) throw new Error('Pick someone still in the game.');
-    if (t.id === p.id) throw new Error("You can't vote for yourself.");
-    g.meeting.votes[p.id] = t.id;
+    if (targetId === SKIP) {
+      g.meeting.votes[p.id] = SKIP;
+    } else {
+      const t = g.players[targetId];
+      if (!t || !isAlive(t)) throw new Error('Pick someone still in the game.');
+      if (t.id === p.id) throw new Error("You can't vote for yourself.");
+      g.meeting.votes[p.id] = t.id;
+    }
     maybeAutoResolve(g);
+    broadcast(g); save();
+  });
+
+  on(socket, 'meeting:call', () => {
+    const g = gameOr(socket.data.code);
+    const p = g.players[socket.data.playerId];
+    if (!p) throw new Error('Not in this game.');
+    if (!isAlive(p)) throw new Error("You're out, so you can't call a meeting.");
+    callMeeting(g, p.name);
     broadcast(g); save();
   });
 
@@ -887,6 +914,12 @@ io.on('connection', (socket) => {
     const g = hostGame(socket, code);
     const k = (g.pendingKills || []).find((x) => x.id === killId);
     reviewKill(g, k, approve, hostName(socket));
+  });
+
+  on(socket, 'host:callMeeting', ({ code }) => {
+    const g = hostGame(socket, code);
+    callMeeting(g, `${hostName(socket)} (host)`);
+    broadcast(g); save();
   });
 
   on(socket, 'host:endVote', ({ code }) => {

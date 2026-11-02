@@ -237,7 +237,7 @@
       const input = el('input', 'grow'); input.value = t.text; input.maxLength = 140;
       input.oninput = () => { t.text = input.value; taskDirty = true; };
       const seg = el('div', 'seg');
-      for (const [val, label] of [[true, 'Shared'], [false, 'Everyone']]) {
+      for (const [val, label] of [[true, '👥 Group (one person)'], [false, '🙋 Individual (everyone)']]) {
         const b = el('button', 'seg-btn' + (t.shared === val ? ' on' : ''), label); b.type = 'button';
         b.onclick = () => { t.shared = val; taskDirty = true; renderTaskEditor(); };
         seg.appendChild(b);
@@ -333,7 +333,7 @@
   $('hh-save-tasks').onclick = async () => {
     const r = await call('host:setTaskPool', { tasks: taskDraft.filter((t) => t.text.trim()) });
     if (r.ok) taskDirty = false;
-    toast(r.ok ? `Saved ${r.count} tasks (${r.shared} shared, ${r.count - r.shared} for everyone). New games use them.` : r.error);
+    toast(r.ok ? `Saved ${r.count} tasks (${r.shared} group, ${r.count - r.shared} individual). New games use them.` : r.error);
   };
   $('hh-copy-link').onclick = async () => {
     const link = `${location.origin}/host/${encodeURIComponent(host.key)}`;
@@ -434,6 +434,7 @@
       ? "You were voted off. You can read the chat but can't send messages."
       : "You were killed. You can read the chat but can't send messages.";
     $('g-plus').classList.toggle('hidden', isHost || !inPlay);
+    $('g-meeting').classList.toggle('hidden', isHost || !me || !me.alive || v.status !== 'playing');
 
     renderChecklist(v);
     renderKillQueue(v);
@@ -450,7 +451,7 @@
     const b = $('g-banner'); b.className = 'banner'; b.innerHTML = '';
     const me = v.me;
     if (v.meeting && v.isHost) {
-      b.appendChild(el('div', null, `🗳️ Players are voting (${v.meeting.votedIds.length} of ${v.meeting.voterCount} in). Keep approving tasks. You can end the vote from the Host tab.`));
+      b.appendChild(el('div', null, `🗳️ ${v.meeting.calledBy ? v.meeting.calledBy + ' called a meeting — players' : 'Players'} are voting (${v.meeting.votedIds.length} of ${v.meeting.voterCount} in). Keep approving tasks. You can end the vote from the Host tab.`));
       return;
     }
     if (v.meeting && meetingHidden) {
@@ -504,7 +505,7 @@
     const mine = !v.isHost && v.me && m.from === v.me.id;
     const d = el('div', 'msg task' + (mine ? ' mine' : ''));
     const head = el('div', 'task-head');
-    head.appendChild(el('span', 'grow', `📸 ${mine ? 'You' : m.name} submitted ${m.shared ? 'a shared task' : 'a task'}`));
+    head.appendChild(el('span', 'grow', `📸 ${mine ? 'You' : m.name} submitted ${m.shared ? 'a group task' : 'an individual task'}`));
     head.appendChild(el('span', 'tag-hosts', '@hosts'));
     d.appendChild(head);
     d.appendChild(el('div', 'task-text', m.taskText));
@@ -589,14 +590,21 @@
         b.onclick = () => openTaskSheet(t);
         li.appendChild(b);
       } else if (t.pending) li.appendChild(el('span', 'tag-state', t.shared && t.pendingBy !== v.me.id ? 'someone sent it' : 'with hosts'));
+      li.insertBefore(el('span', 'task-kind ' + (t.shared ? 'group' : 'solo'), t.shared ? 'GROUP' : 'YOU'), li.children[1]);
       return li;
     };
     if (shared.length) {
-      ul.appendChild(el('li', 'cl-section', '👥 Shared — one person does it for everyone'));
+      const h = el('li', 'cl-section');
+      h.appendChild(el('div', 'cl-section-title', '👥 Group tasks'));
+      h.appendChild(el('div', 'cl-section-sub', 'Only ONE person needs to do each of these. As soon as anyone gets it approved, it\'s checked off for everyone.'));
+      ul.appendChild(h);
       for (const t of shared) ul.appendChild(row(t));
     }
     if (mine.length) {
-      ul.appendChild(el('li', 'cl-section', '🙋 Yours — everyone does these'));
+      const h = el('li', 'cl-section');
+      h.appendChild(el('div', 'cl-section-title', '🙋 Individual tasks'));
+      h.appendChild(el('div', 'cl-section-sub', 'EVERY player has to do these themselves — someone else doing it doesn\'t count for you.'));
+      ul.appendChild(h);
       for (const t of mine) ul.appendChild(row(t));
     }
   }
@@ -661,7 +669,7 @@
     for (const t of v.sharedTasks || []) {
       const before = (prev.sharedTasks || []).find((x) => x.id === t.id);
       if (!before || before.pendingBy !== v.me.id) continue;
-      if (!before.done && t.done) { toast(`✅ Approved: ${t.text} — done for everyone`); chime(); }
+      if (!before.done && t.done) { toast(`✅ Approved: ${t.text} — group task done for everyone`); chime(); }
       else if (!t.pending && !t.done) toast(`❌ A host didn't accept your photo for "${t.text}". Try again.`, 4500);
     }
   }
@@ -675,7 +683,7 @@
     if (!players.length) box.appendChild(el('p', 'hint', 'No players yet.'));
     if (v.isHost && (v.sharedTasks || []).length && v.status !== 'lobby') {
       const c = el('div', 'pcard shared-card');
-      const head = el('div', 'pcard-head'); head.appendChild(el('span', 'pcard-name grow', '👥 Shared tasks'));
+      const head = el('div', 'pcard-head'); head.appendChild(el('span', 'pcard-name grow', '👥 Group tasks'));
       head.appendChild(el('span', 'tag-state', 'one person does each'));
       c.appendChild(head);
       const list = el('div', 'ptasks');
@@ -732,12 +740,13 @@
       ? 'OFF — task photos are approved instantly and kills post (and sound the alarm) as soon as they upload. You won\'t get pinged.'
       : 'ON — you approve every task photo and kill video before it counts.';
     const nShared = taskPool.filter((t) => t.shared).length, nEvery = taskPool.length - nShared;
-    $('c-tasks-info').textContent = `Task list: ${nShared} shared, ${nEvery} for everyone. Edit it under All games → Host settings. Changes apply to the next game started.`;
+    $('c-tasks-info').textContent = `Task list: ${nShared} group, ${nEvery} individual. Edit it under All games → Host settings. Changes apply to the next game started.`;
     $('c-tasks-info').classList.toggle('hidden', !!(host && host.demo));
     const s = v.status;
     $('c-start').classList.toggle('hidden', !(s === 'lobby' || s === 'ended'));
     $('c-start').textContent = s === 'ended' ? 'Play again (same players)' : `Start game (${v.players.length} players)`;
     $('c-endvote').classList.toggle('hidden', s !== 'meeting');
+    $('c-meeting').classList.toggle('hidden', s !== 'playing');
     $('c-lobby').classList.toggle('hidden', s === 'lobby');
     $('c-endgame').classList.toggle('hidden', !['reveal', 'playing', 'meeting'].includes(s));
   }
@@ -835,7 +844,9 @@
     if (m.video !== shownMeetingVideo) {
       shownMeetingVideo = m.video;
       const box = $('mt-video'); box.innerHTML = '';
-      if (!m.video) box.appendChild(el('div', 'video-wait', '🎬 Kill video is processing…'));
+      box.classList.toggle('hidden', !m.victimId);
+      if (!m.victimId) { /* called meeting: no video */ }
+      else if (!m.video) box.appendChild(el('div', 'video-wait', '🎬 Kill video is processing…'));
       else {
         const vid = document.createElement('video');
         vid.src = m.video; vid.controls = true; vid.autoplay = true; vid.muted = true; vid.loop = true; vid.playsInline = true; vid.setAttribute('playsinline', '');
@@ -843,8 +854,8 @@
       }
     }
     ov.classList.toggle('hidden', meetingHidden);
-    $('mt-sub').textContent = `💀 ${m.victimName || 'Someone'} was killed!`;
-    $('mt-status').textContent = `${m.votedIds.length} of ${m.voterCount} votes in. Most votes gets booted — a tie means nobody goes.`;
+    $('mt-sub').textContent = m.victimId ? `💀 ${m.victimName || 'Someone'} was killed!` : `📢 ${m.calledBy || 'Someone'} called a meeting!`;
+    $('mt-status').textContent = `${m.votedIds.length} of ${m.voterCount} votes in. Most votes gets booted — a tie or "skip" means nobody goes.`;
     $('mt-endvote').classList.toggle('hidden', !v.isHost);
 
     const grid = $('mt-votes'); grid.innerHTML = '';
@@ -863,9 +874,19 @@
       };
       grid.appendChild(b);
     }
+    if (!v.isHost && me && me.alive) {
+      const sk = el('button', 'vote-btn skip-btn' + (m.myVote === 'skip' ? ' picked' : ''), '⏭️ Skip vote');
+      sk.disabled = !canVote;
+      sk.onclick = async () => {
+        if (!confirm("Skip this vote? You can't change it.")) return;
+        const r = await call('vote', { targetId: 'skip' });
+        if (!r.ok) toast(r.error);
+      };
+      grid.appendChild(sk);
+    }
     if (m.myVote) {
       const target = v.players.find((p) => p.id === m.myVote);
-      $('mt-status').textContent = `You voted for ${target ? target.name : '?'}. ${m.votedIds.length} of ${m.voterCount} votes in…`;
+      $('mt-status').textContent = `${m.myVote === 'skip' ? 'You voted to skip.' : `You voted for ${target ? target.name : '?'}.`} ${m.votedIds.length} of ${m.voterCount} votes in…`;
     }
   }
   $('mt-hide').onclick = () => { meetingHidden = true; $('ov-meeting').classList.add('hidden'); if (view) renderBanner(view); setTab('chat'); };
@@ -880,7 +901,10 @@
     if (r && seen.result !== r.id) {
       seenSet(v.code, { result: r.id });
       const names = Object.fromEntries(v.players.map((p) => [p.id, p.name]));
-      if (r.tie) {
+      names.skip = '⏭️ Skip';
+      if (r.skipped) {
+        showResult('⏭️', 'Vote skipped', 'The group voted to skip. Nobody was voted off.', r.tally, names, '');
+      } else if (r.tie) {
         showResult('🤷', 'Nobody was voted off', 'It was a tie (or no votes).', r.tally, names, '');
       } else if (r.wasImposter) {
         showResult('🚨', `${r.name} WAS an imposter!`, r.impostersLeft ? `${r.impostersLeft} imposter${r.impostersLeft > 1 ? 's' : ''} still out there.` : '', r.tally, names, 'imp');
@@ -912,6 +936,13 @@
 
   // ---------- kill video ----------
   let killVictim = null, killFile = null;
+  async function callMeeting(asHost) {
+    if (!confirm("Call an emergency meeting? Everyone's phone will alarm and everyone still in votes (or skips).")) return;
+    const r = asHost ? await call('host:callMeeting', { code: currentCode }) : await call('meeting:call');
+    if (!r.ok) toast(r.error);
+  }
+  $('g-meeting').onclick = () => callMeeting(false);
+  $('c-meeting').onclick = () => callMeeting(true);
   const closeActions = () => $('ov-actions').classList.add('hidden');
   $('g-plus').onclick = () => $('ov-actions').classList.remove('hidden');
   $('act-cancel').onclick = closeActions;
@@ -937,7 +968,9 @@
     if (!open.length) return toast('Nothing left to submit — every task is done or waiting for a host.');
     const list = $('tk-list'); list.innerHTML = '';
     for (const t of open) {
-      const b = el('button', 'btn task-pick', (t.shared ? '👥 ' : '🙋 ') + t.text);
+      const b = el('button', 'btn task-pick');
+      b.appendChild(el('span', 'task-kind ' + (t.shared ? 'group' : 'solo'), t.shared ? 'GROUP' : 'YOU'));
+      b.appendChild(document.createTextNode(' ' + t.text));
       b.onclick = () => pickTk(t);
       list.appendChild(b);
     }
