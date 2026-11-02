@@ -242,7 +242,7 @@ function viewFor(g, who, full) {
   const isHost = who.kind === 'host';
   const me = who.kind === 'player' ? g.players[who.playerId] : null;
   const ended = g.status === 'ended';
-  const showRoles = isHost || ended;
+  const showRoles = ended; // nobody, hosts included, sees roles until the game is over
   const players = plist(g).map((p) => ({
     id: p.id, name: p.name, alive: isAlive(p), dead: !!p.dead, ejected: !!p.ejected,
     connected: !!p.connected,
@@ -271,7 +271,8 @@ function viewFor(g, who, full) {
     };
   }
   const openKills = (g.pendingKills || []).filter((k) => k.status === 'processing' || k.status === 'pending');
-  if (isHost) v.pendingKills = openKills;
+  // hosts approve kills without learning who the imposter is: only the victim and the video
+  if (isHost) v.pendingKills = openKills.map((k) => ({ id: k.id, victimId: k.victimId, victimName: k.victimName, video: k.video, seconds: k.seconds, status: k.status, ts: k.ts }));
   if (me) {
     const partners = me.role === 'imposter'
       ? Object.values(g.players).filter((p) => p.role === 'imposter' && p.id !== me.id).map((p) => p.name)
@@ -401,7 +402,7 @@ app.post('/api/kill', express.raw({ type: () => true, limit: '60mb' }), async (r
     };
     g.pendingKills.push(kill);
     if (g.pendingKills.length > 30) g.pendingKills.splice(0, g.pendingKills.length - 30);
-    io.to(hostRoom(g)).emit('host:tag', { kind: 'kill', code, name: killer.name, victimName: victim.name });
+    io.to(hostRoom(g)).emit('host:tag', { kind: 'kill', code, victimName: victim.name });
     broadcast(g, 'hosts'); save();
     res.json({ ok: true });
 
@@ -485,7 +486,7 @@ function reviewKill(g, k, approve, reviewer) {
   if (!killer || !isAlive(killer) || !victim || !isAlive(victim)) {
     k.status = 'invalid';
     broadcast(g); save();
-    throw new Error(`Can't approve: ${!killer || !isAlive(killer) ? k.killerName : k.victimName} is already out.`);
+    throw new Error(!victim || !isAlive(victim) ? `Can't approve: ${k.victimName} is already out.` : "Can't approve: the imposter who posted this is already out.");
   }
   k.status = 'approved'; k.reviewer = reviewer;
   victim.dead = true;
@@ -603,7 +604,7 @@ function botTick(g) {
         const k = { id: id(4), killerId: killer.id, killerName: killer.name, victimId: victim.id, victimName: victim.name, video: '/demo/kill.mp4', seconds: 6, status: 'pending', ts: t };
         g.pendingKills = g.pendingKills || [];
         g.pendingKills.push(k);
-        io.to(hostRoom(g)).emit('host:tag', { kind: 'kill', code: g.code, name: killer.name, victimName: victim.name });
+        io.to(hostRoom(g)).emit('host:tag', { kind: 'kill', code: g.code, victimName: victim.name });
         demoKillReady(g, k);
         broadcast(g, 'hosts');
       }

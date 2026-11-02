@@ -216,7 +216,7 @@
     chime();
     try { navigator.vibrate && navigator.vibrate([200, 100, 200]); } catch {}
     const text = t.kind === 'kill'
-      ? `🔪 @hosts — kill to approve in ${t.code}: ${t.name} says they got ${t.victimName}. Tap to open.`
+      ? `🔪 @hosts — kill to approve in ${t.code}: someone says they got ${t.victimName}. Tap to open.`
       : `📸 @hosts — ${t.name} in ${t.code} wants approval: "${t.taskText}". Tap to open.`;
     toast(text, 8000, () => {
       if (currentCode !== t.code) openHostGame(t.code); else setTab('chat');
@@ -505,8 +505,6 @@
     const d = el('div', 'msg task' + (mine ? ' mine' : ''));
     const head = el('div', 'task-head');
     head.appendChild(el('span', 'grow', `📸 ${mine ? 'You' : m.name} submitted ${m.shared ? 'a shared task' : 'a task'}`));
-    const sender = v.isHost && v.players.find((p) => p.id === m.from);
-    if (sender && sender.role === 'imposter' && m.status === 'pending') head.appendChild(el('span', 'imp-flag', 'imposter'));
     head.appendChild(el('span', 'tag-hosts', '@hosts'));
     d.appendChild(head);
     d.appendChild(el('div', 'task-text', m.taskText));
@@ -617,7 +615,7 @@
       const have = killCards.get(k.id);
       if (have && have.sig === sig) continue;
       const card = el('div', 'kill-card');
-      card.appendChild(el('div', 'kill-card-head', `🔪 Kill to approve · ${k.killerName} (imposter) says they got ${k.victimName}`));
+      card.appendChild(el('div', 'kill-card-head', `🔪 Kill to approve · an imposter says they got ${k.victimName}`));
       if (!k.video) card.appendChild(el('div', 'video-wait', '🎬 Video is processing…'));
       else {
         const vid = document.createElement('video');
@@ -636,7 +634,7 @@
         if (!r.ok) { toast(r.error); yes.disabled = no.disabled = false; }
       };
       no.onclick = async () => {
-        if (!confirm(`Reject this kill video? ${k.killerName} can record a new one.`)) return;
+        if (!confirm('Reject this kill video? The imposter can upload a new one.')) return;
         const r = await call('host:reviewKill', { code: v.code, killId: k.id, approve: false });
         if (!r.ok) toast(r.error);
       };
@@ -671,7 +669,7 @@
   function stateLabel(p) { return p.dead ? '💀 killed' : p.ejected ? '🚫 voted off' : ''; }
   function renderPlayers(v) {
     const box = $('g-players'); box.innerHTML = '';
-    $('roles-toggle-wrap').classList.toggle('hidden', !v.isHost || v.status === 'lobby' || v.status === 'ended');
+    $('roles-toggle-wrap').classList.add('hidden'); // hosts don't get to see roles either
     const players = v.players.slice();
     if (v.isHost) players.sort((a, b) => a.name.localeCompare(b.name));
     if (!players.length) box.appendChild(el('p', 'hint', 'No players yet.'));
